@@ -4,7 +4,7 @@ import {
   DollarSign, FileText, Trash2, Edit3, CheckCircle2, Circle, Briefcase,
   AlertCircle, ChevronRight, Search, TrendingUp, Clock, Package,
   Upload, Loader2, Download, Sparkles, AlertTriangle, UserCircle2,
-  Landmark, Scale, PiggyBank, Percent, Bell, LogOut, Activity
+  Landmark, Scale, PiggyBank, Percent, Bell, LogOut, Activity, Send
 } from "lucide-react";
 import {
   supabase, supabaseConfigured,
@@ -611,6 +611,7 @@ function newTransaction(type) {
     },
     prelistChecklist: [],
     closingChecklist: [],
+    documents: [],  // metadata only: { id, name, type, size, addedAt }
     clientPortal: { enabled: false, clients: [], visibleMilestones: [], clientNotes: "", showFinancials: true },
     notes: "",
     createdAt: new Date().toISOString(),
@@ -1241,6 +1242,7 @@ function MainApp({ user }) {
         <nav style={styles.nav}>
           {[
             { id: "home",           label: "Home",                 icon: Sparkles },
+            { id: "todos",          label: "To-Dos",               icon: CheckCircle2 },
             { id: "dashboard",      label: "Pipeline",             icon: TrendingUp },
             { id: "futureListings", label: "Future Listings",      icon: Home },
             { id: "listings",       label: "Listing Transactions", icon: Briefcase },
@@ -1267,7 +1269,20 @@ function MainApp({ user }) {
 
       <main style={styles.main}>
         {view === "home" ? (
-          <HomeBase transactions={transactions} stats={stats} onOpen={setDetail} onNewListing={() => setEditing(newTransaction("listing"))} onNewBuyer={() => setEditing(newTransaction("buyer"))} onGoToPipeline={() => setView("dashboard")} />
+          <HomeBase
+            transactions={transactions}
+            stats={stats}
+            futureListings={futureListings}
+            futureBuyers={futureBuyers}
+            isCloud={isCloud}
+            onOpen={setDetail}
+            onNewListing={() => setEditing(newTransaction("listing"))}
+            onNewBuyer={() => setEditing(newTransaction("buyer"))}
+            onGoToPipeline={() => setView("dashboard")}
+            onGoToView={setView}
+          />
+        ) : view === "todos" ? (
+          <TodosTab />
         ) : view === "dashboard" ? (
           <Dashboard stats={stats} transactions={transactions} onOpen={setDetail} />
         ) : view === "futureListings" ? (
@@ -1405,16 +1420,25 @@ function MainApp({ user }) {
 // HOME BASE — daily landing page: links, pipeline at-a-glance, notes, todos
 // ════════════════════════════════════════════════════════════════════════════
 const DEFAULT_LINKS = [
-  { id: "nwmls",   label: "NWMLS",             url: "https://www.nwmls.com",                    icon: "🏠", color: "#1d4e89" },
-  { id: "pl",      label: "Paperless Pipeline",url: "https://app.paperlesspipeline.com",        icon: "📋", color: "#2d8c5c" },
-  { id: "cowlitz", label: "Cowlitz Assessor",  url: "https://www.cowlitzwa.gov/178/Assessor",   icon: "🗺️", color: "#7b4e2b" },
-  { id: "gmail",   label: "Gmail",             url: "https://mail.google.com",                  icon: "✉️", color: "#c5221f" },
-  { id: "cal",     label: "Calendar",          url: "https://calendar.google.com",              icon: "📅", color: "#1a73e8" },
-  { id: "zillow",  label: "Zillow",            url: "https://www.zillow.com",                   icon: "🏡", color: "#006aff" },
-  { id: "redfin",  label: "Redfin",            url: "https://www.redfin.com",                   icon: "🔍", color: "#a02021" },
-  { id: "docusign",label: "DocuSign",          url: "https://www.docusign.com",                 icon: "✍️", color: "#ffcc22" },
-  { id: "chatgpt", label: "ChatGPT",           url: "https://chat.openai.com",                  icon: "🤖", color: "#10a37f" },
+  { id: "nwmls",   label: "NWMLS",             url: "https://www.nwmls.com",                    icon: "🏠", color: "#1d4e89", iconMode: "favicon" },
+  { id: "pl",      label: "Paperless Pipeline",url: "https://app.paperlesspipeline.com",        icon: "📋", color: "#2d8c5c", iconMode: "favicon" },
+  { id: "cowlitz", label: "Cowlitz Assessor",  url: "https://www.cowlitzwa.gov/178/Assessor",   icon: "🗺️", color: "#7b4e2b", iconMode: "favicon" },
+  { id: "gmail",   label: "Gmail",             url: "https://mail.google.com",                  icon: "✉️", color: "#c5221f", iconMode: "favicon" },
+  { id: "cal",     label: "Calendar",          url: "https://calendar.google.com",              icon: "📅", color: "#1a73e8", iconMode: "favicon" },
+  { id: "zillow",  label: "Zillow",            url: "https://www.zillow.com",                   icon: "🏡", color: "#006aff", iconMode: "favicon" },
+  { id: "redfin",  label: "Redfin",            url: "https://www.redfin.com",                   icon: "🔍", color: "#a02021", iconMode: "favicon" },
+  { id: "docusign",label: "DocuSign",          url: "https://www.docusign.com",                 icon: "✍️", color: "#ffcc22", iconMode: "favicon" },
+  { id: "chatgpt", label: "ChatGPT",           url: "https://chat.openai.com",                  icon: "🤖", color: "#10a37f", iconMode: "favicon" },
 ];
+
+// Returns the Google favicon service URL for a given site URL.
+// Returns null if we can't parse a hostname.
+function faviconUrl(url) {
+  try {
+    const u = new URL(url);
+    return `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=64`;
+  } catch (e) { return null; }
+}
 
 const LINKS_STORAGE_KEY = "jct_home_links";
 const NOTES_STORAGE_KEY = "jct_quick_notes";
@@ -1427,11 +1451,10 @@ const CALENDAR_EVENTS_KEY = "jct_calendar_events";
 
 // Widget definitions — every available widget on the home page
 const WIDGET_TYPES = {
-  todosToday:    { label: "Today's To-Dos",       size: "small", description: "Quick daily checklist" },
-  todosGeneral:  { label: "General To-Dos",       size: "small", description: "Longer-term items" },
-  customList:    { label: "Custom List",          size: "small", description: "Name it whatever you want", multiple: true },
+  todoReminders: { label: "To-Do Reminders",      size: "small", description: "Items from your To-Dos tab with active reminders" },
   notes:         { label: "Quick Notes",          size: "small", description: "Scratchpad — auto-saves" },
   next7:         { label: "Next 7 Days",          size: "small", description: "Upcoming milestone deadlines" },
+  checkIns:      { label: "Lead Check-Ins",       size: "small", description: "Future Listings & Buyers due for follow-up" },
   calendar:      { label: "Calendar",             size: "large", description: "Month view with milestones + your own events" },
   quickLaunch:   { label: "Quick Launch",         size: "large", description: "Website tiles (Gmail, NWMLS, etc.)" },
   recent:        { label: "Recent Transactions",  size: "small", description: "Last 4 deals you touched" },
@@ -1442,8 +1465,8 @@ const WIDGET_TYPES = {
 
 // Default layout — what shows up on first load
 const DEFAULT_LAYOUT = [
-  { id: "w_todos_today", type: "todosToday", col: "left" },
-  { id: "w_todos_gen", type: "todosGeneral", col: "right" },
+  { id: "w_todo_reminders", type: "todoReminders", col: "left" },
+  { id: "w_check_ins", type: "checkIns", col: "right" },
   { id: "w_quick_launch", type: "quickLaunch", col: "full" },
   { id: "w_next7", type: "next7", col: "left" },
   { id: "w_calendar", type: "calendar", col: "right" },
@@ -1461,18 +1484,29 @@ const HOME_LABEL = "Kalama, WA";
 // Edit mode lets you add/remove/reorder widgets across two columns.
 // All widget data and layout auto-saves per device.
 // ════════════════════════════════════════════════════════════════════════════
-function HomeBase({ transactions, stats, onOpen, onNewListing, onNewBuyer, onGoToPipeline }) {
+function HomeBase({ transactions, stats, futureListings, futureBuyers, isCloud, onOpen, onNewListing, onNewBuyer, onGoToPipeline, onGoToView }) {
   const [layout, setLayout] = useState(DEFAULT_LAYOUT);
   const [editMode, setEditMode] = useState(false);
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [weather, setWeather] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
 
-  // Load layout once
+  // Load layout once. Migrate old to-do widgets to the new system:
+  // remove todosToday/todosGeneral/customList from saved layouts and add
+  // todoReminders if it's not already there.
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
-      if (saved) setLayout(JSON.parse(saved));
+      if (saved) {
+        let parsed = JSON.parse(saved);
+        const deprecatedTypes = new Set(["todosToday", "todosGeneral", "customList"]);
+        const cleaned = parsed.filter(w => !deprecatedTypes.has(w.type));
+        const hasTodoReminders = cleaned.some(w => w.type === "todoReminders");
+        if (!hasTodoReminders) {
+          cleaned.unshift({ id: "w_todo_reminders", type: "todoReminders", col: "left" });
+        }
+        setLayout(cleaned);
+      }
     } catch (e) {}
   }, []);
 
@@ -1545,6 +1579,10 @@ function HomeBase({ transactions, stats, onOpen, onNewListing, onNewBuyer, onGoT
 
   const widgetProps = {
     transactions, stats, onOpen, urgent, weather, editMode,
+    futureListings: futureListings || [],
+    futureBuyers: futureBuyers || [],
+    isCloud,
+    onGoToView,
   };
 
   return (
@@ -1735,19 +1773,23 @@ function ColumnDropZone({ col, editMode, draggedId, onDropOnEmptyCol, empty, chi
 
 // ─── Widget Renderer (dispatch by type) ─────────────────────────────────────
 function renderWidget(widget, props) {
-  const { transactions, stats, onOpen, urgent, weather } = props;
+  const { transactions, stats, onOpen, urgent, weather, futureListings, futureBuyers, isCloud, onGoToView } = props;
   switch (widget.type) {
-    case "todosToday":   return <TodoListWidget storageKey={TODOS_TODAY_KEY}   title="Today's To-Dos" placeholder="Add something for today…" />;
-    case "todosGeneral": return <TodoListWidget storageKey={TODOS_GENERAL_KEY} title="General To-Dos" placeholder="Add a longer-term item…" />;
-    case "customList":   return <CustomListWidget widgetId={widget.id} />;
+    case "todoReminders":return <TodoRemindersWidget onGoToView={onGoToView} />;
     case "notes":        return <NotesWidget />;
     case "next7":        return <Next7Widget transactions={transactions} onOpen={onOpen} />;
+    case "checkIns":     return <CheckInsWidget futureListings={futureListings} futureBuyers={futureBuyers} isCloud={isCloud} onGoToView={onGoToView} />;
     case "calendar":     return <CalendarWidget transactions={transactions} onOpen={onOpen} />;
-    case "quickLaunch":  return <QuickLaunchWidget />;
+    case "quickLaunch":  return <QuickLaunchWidget homeEditMode={props.editMode} />;
     case "recent":       return <RecentWidget transactions={transactions} onOpen={onOpen} />;
     case "calculator":   return <CalculatorWidget />;
     case "contactLookup":return <ContactLookupWidget transactions={transactions} onOpen={onOpen} />;
     case "habits":       return <HabitsWidget />;
+    // Legacy widget types — kept so existing saved layouts don't crash on load.
+    // They render nothing; user is expected to remove them in Customize mode.
+    case "todosToday":   return null;
+    case "todosGeneral": return null;
+    case "customList":   return null;
     default: return <div style={{ padding: 20, color: "var(--ink-soft)" }}>Unknown widget: {widget.type}</div>;
   }
 }
@@ -1875,6 +1917,21 @@ function NotesWidget() {
 
 // ─── Next 7 Days Widget ──────────────────────────────────────────────────────
 function Next7Widget({ transactions, onOpen }) {
+  // Live-tracked personal calendar events from localStorage. We poll periodically
+  // so that adding events in the Calendar widget reflects here without a full reload.
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  useEffect(() => {
+    const reload = () => {
+      try {
+        const stored = localStorage.getItem(CALENDAR_EVENTS_KEY);
+        setCalendarEvents(stored ? JSON.parse(stored) : []);
+      } catch (e) { setCalendarEvents([]); }
+    };
+    reload();
+    const id = setInterval(reload, 3000);
+    return () => clearInterval(id);
+  }, []);
+
   const next7 = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const days = [];
@@ -1882,15 +1939,21 @@ function Next7Widget({ transactions, onOpen }) {
       const d = new Date(today); d.setDate(today.getDate() + i);
       const iso = formatLocalDate(d);
       const events = [];
+      // Transaction milestones
       transactions
         .filter(t => t.status !== "closed" && t.status !== "fellThrough")
         .forEach(t => t.milestones.forEach(m => {
-          if (m.date === iso && !m.complete) events.push({ txn: t, milestone: m });
+          if (m.date === iso && !m.complete) events.push({ kind: "milestone", txn: t, milestone: m });
         }));
+      // Personal calendar events
+      calendarEvents
+        .filter(ev => ev.date === iso)
+        .forEach(ev => events.push({ kind: "personal", event: ev }));
       days.push({ date: d, iso, events });
     }
     return days;
-  }, [transactions]);
+  }, [transactions, calendarEvents]);
+
   return (
     <div>
       <h2 style={styles.sectionTitle}>Next 7 Days</h2>
@@ -1910,12 +1973,24 @@ function Next7Widget({ transactions, onOpen }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 {d.events.length === 0 ? (
                   <div style={{ color: "var(--ink-soft)", fontSize: 12, fontStyle: "italic" }}>—</div>
-                ) : d.events.map((ev, i) => (
-                  <button key={i} onClick={() => onOpen(ev.txn)} style={styles.next7Event}>
-                    <span style={{ fontWeight: 500 }}>{ev.milestone.label}</span>
-                    <span style={{ color: "var(--ink-soft)" }}> · {ev.txn.address?.split(",")[0]}</span>
-                  </button>
-                ))}
+                ) : d.events.map((ev, i) => {
+                  if (ev.kind === "milestone") {
+                    return (
+                      <button key={i} onClick={() => onOpen(ev.txn)} style={styles.next7Event}>
+                        <span style={{ fontWeight: 500 }}>{ev.milestone.label}</span>
+                        <span style={{ color: "var(--ink-soft)" }}> · {ev.txn.address?.split(",")[0]}</span>
+                      </button>
+                    );
+                  }
+                  // Personal calendar event — non-clickable but styled with accent dot
+                  return (
+                    <div key={i} style={{ ...styles.next7Event, cursor: "default", display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                      <span style={{ fontWeight: 500 }}>{ev.event.title}</span>
+                      {ev.event.time && <span style={{ color: "var(--ink-soft)" }}> · {ev.event.time}</span>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -2079,7 +2154,12 @@ function CalendarWidget({ transactions, onOpen }) {
 }
 
 // ─── Quick Launch Widget ─────────────────────────────────────────────────────
-function QuickLaunchWidget() {
+// `homeEditMode` is whether the WHOLE home page is in customize mode (drag widgets).
+// `editingLinks` is whether THIS widget specifically is in tile-edit mode.
+// We enable tile editing in both situations so the user doesn't have to learn
+// the difference. (Note: the parent wraps widget content in pointer-events:none
+// when homeEditMode is on, so this widget overrides that for its tile controls.)
+function QuickLaunchWidget({ homeEditMode }) {
   const [links, setLinks] = useState(DEFAULT_LINKS);
   const [editingLinks, setEditingLinks] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -2091,16 +2171,21 @@ function QuickLaunchWidget() {
     if (!loaded) return;
     try { localStorage.setItem(LINKS_STORAGE_KEY, JSON.stringify(links)); } catch (e) {}
   }, [links, loaded]);
+
+  const editing = editingLinks || homeEditMode;
+
   return (
     <div>
       <div style={styles.sectionTitleRow}>
         <h2 style={styles.sectionTitle}>Quick Launch</h2>
-        <button onClick={() => setEditingLinks(!editingLinks)}
-          style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 12 }}>
-          {editingLinks ? <><CheckCircle2 size={12} /> Done</> : <><Edit3 size={12} /> Edit</>}
-        </button>
+        {!homeEditMode && (
+          <button onClick={() => setEditingLinks(!editingLinks)}
+            style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 12 }}>
+            {editingLinks ? <><CheckCircle2 size={12} /> Done</> : <><Edit3 size={12} /> Edit</>}
+          </button>
+        )}
       </div>
-      <QuickLaunch links={links} onChange={setLinks} editing={editingLinks} />
+      <QuickLaunch links={links} onChange={setLinks} editing={editing} />
     </div>
   );
 }
@@ -2265,6 +2350,92 @@ function ContactLookupWidget({ transactions, onOpen }) {
 }
 
 // ─── Habit / Streak Tracker Widget ───────────────────────────────────────────
+// ─── Lead Check-Ins Widget ───────────────────────────────────────────────────
+// Shows Future Listings + Future Buyers due for check-in within the next 7 days.
+// When isCloud, reads from props (live). When local, reads from localStorage.
+function CheckInsWidget({ futureListings, futureBuyers, isCloud, onGoToView }) {
+  const [localFL, setLocalFL] = useState([]);
+  const [localFB, setLocalFB] = useState([]);
+
+  useEffect(() => {
+    if (isCloud) return;
+    const reload = () => {
+      try { const v = localStorage.getItem(FUTURE_LISTINGS_KEY); setLocalFL(v ? JSON.parse(v) : []); } catch (e) { setLocalFL([]); }
+      try { const v = localStorage.getItem(FUTURE_BUYERS_KEY); setLocalFB(v ? JSON.parse(v) : []); } catch (e) { setLocalFB([]); }
+    };
+    reload();
+    // Poll occasionally so the widget reflects edits made in other tabs
+    const interval = setInterval(reload, 3000);
+    return () => clearInterval(interval);
+  }, [isCloud]);
+
+  const fl = isCloud ? (futureListings || []) : localFL;
+  const fb = isCloud ? (futureBuyers || []) : localFB;
+  const leads = getLeadsNeedingCheckIn(fl, fb, 7);
+
+  return (
+    <div>
+      <div style={styles.sectionTitleRow}>
+        <h2 style={styles.sectionTitle}>Check-Ins This Week</h2>
+        {leads.length > 0 && (
+          <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{leads.length} due</div>
+        )}
+      </div>
+      <div style={{ background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12, overflow: "hidden" }}>
+        {leads.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", color: "var(--ink-soft)", fontSize: 13 }}>
+            <CheckCircle2 size={18} style={{ color: "var(--ink-soft)", marginBottom: 6, opacity: 0.4 }} /><br/>
+            All caught up — no check-ins due this week.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {leads.map(lead => {
+              const isListing = lead._leadType === "futureListing";
+              const title = isListing ? (lead.address || "(no address)") : (lead.name || "(no name)");
+              const subtitle = isListing
+                ? (lead.ownerName || "—")
+                : (lead.lookingFor || "—");
+              return (
+                <button
+                  key={lead.id}
+                  onClick={() => onGoToView(isListing ? "futureListings" : "futureBuyers")}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "10px 14px", border: "none",
+                    borderBottom: "1px solid var(--ink-line)",
+                    background: "transparent", textAlign: "left", cursor: "pointer",
+                    width: "100%",
+                  }}
+                  data-urgent="true"
+                >
+                  <div style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: lead._status.kind === "overdue" || lead._status.kind === "today" ? "var(--accent)"
+                              : lead._status.kind === "upcoming" ? "#a86b1f"
+                              : "var(--ink-soft)",
+                    flexShrink: 0,
+                  }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {title}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {isListing ? "Future Listing" : "Future Buyer"} · {subtitle}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: lead._status.color, whiteSpace: "nowrap" }}>
+                    {lead._status.label}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HabitsWidget() {
   const [habits, setHabits] = useState([]);
   const [newHabitText, setNewHabitText] = useState("");
@@ -2478,15 +2649,19 @@ function weatherEmoji(code) {
 function QuickLaunch({ links, onChange, editing }) {
   const [newLink, setNewLink] = useState({ label: "", url: "", icon: "🔗" });
   const [draggedIdx, setDraggedIdx] = useState(null);
+  // Tracks links whose favicon failed to load — falls back to emoji
+  const [faviconFailed, setFaviconFailed] = useState({});
 
   const addLink = () => {
     if (!newLink.label.trim() || !newLink.url.trim()) return;
     let url = newLink.url.trim();
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-    onChange([...links, { id: newId(), label: newLink.label.trim(), url, icon: newLink.icon || "🔗", color: "#6b7585" }]);
+    // New links default to favicon mode (auto-fetch the site logo)
+    onChange([...links, { id: newId(), label: newLink.label.trim(), url, icon: newLink.icon || "🔗", iconMode: "favicon", color: "#6b7585" }]);
     setNewLink({ label: "", url: "", icon: "🔗" });
   };
   const removeLink = (id) => onChange(links.filter(l => l.id !== id));
+  const toggleIconMode = (id) => onChange(links.map(l => l.id === id ? { ...l, iconMode: l.iconMode === "favicon" ? "emoji" : "favicon" } : l));
 
   const handleDragStart = (i) => setDraggedIdx(i);
   const handleDragOver = (e, i) => {
@@ -2499,6 +2674,26 @@ function QuickLaunch({ links, onChange, editing }) {
     onChange(next);
   };
   const handleDragEnd = () => setDraggedIdx(null);
+
+  // Render a tile's icon — favicon image if iconMode is "favicon" and it hasn't failed,
+  // otherwise the emoji.
+  const renderIcon = (l) => {
+    if (l.iconMode === "favicon" && !faviconFailed[l.id]) {
+      const fav = faviconUrl(l.url);
+      if (fav) {
+        return (
+          <img
+            src={fav}
+            alt=""
+            width={28} height={28}
+            onError={() => setFaviconFailed(s => ({ ...s, [l.id]: true }))}
+            style={{ objectFit: "contain", borderRadius: 6 }}
+          />
+        );
+      }
+    }
+    return <div style={{ fontSize: 26 }}>{l.icon || "🔗"}</div>;
+  };
 
   return (
     <div>
@@ -2513,15 +2708,29 @@ function QuickLaunch({ links, onChange, editing }) {
             <a href={l.url} target="_blank" rel="noopener noreferrer"
               style={{ ...styles.linkTile, cursor: editing ? "grab" : "pointer" }}
               onClick={(e) => { if (editing) e.preventDefault(); }}>
-              <div style={{ fontSize: 26 }}>{l.icon}</div>
+              {renderIcon(l)}
               <div style={{ fontSize: 12, fontWeight: 500, color: "var(--ink)", textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
                 {l.label}
               </div>
             </a>
             {editing && (
-              <button onClick={() => removeLink(l.id)} style={styles.linkRemoveBtn} title="Remove">
-                <X size={10} />
-              </button>
+              <>
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleIconMode(l.id); }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  draggable={false}
+                  style={styles.linkIconToggleBtn}
+                  title={l.iconMode === "favicon" ? "Switch to emoji" : "Switch to website logo"}>
+                  {l.iconMode === "favicon" ? "😀" : "🌐"}
+                </button>
+                <button
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeLink(l.id); }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  draggable={false}
+                  style={styles.linkRemoveBtn} title="Remove">
+                  <X size={10} />
+                </button>
+              </>
             )}
           </div>
         ))}
@@ -2775,6 +2984,234 @@ function EmptyState({ type, onCreate }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// LEAD CHECK-IN — shared logic for Future Listings + Future Buyers
+// Cadence-based reminders with auto-rolling next-check-in date.
+// ════════════════════════════════════════════════════════════════════════════
+
+const CHECK_IN_CADENCE_OPTIONS = [
+  { value: 0, label: "No reminder" },
+  { value: 7, label: "Every week" },
+  { value: 14, label: "Every 2 weeks" },
+  { value: 30, label: "Every month" },
+  { value: 60, label: "Every 2 months" },
+  { value: 90, label: "Every 3 months" },
+  { value: 180, label: "Every 6 months" },
+];
+
+// Days between two YYYY-MM-DD strings (positive if a is before b)
+function daysBetween(aIso, bIso) {
+  if (!aIso || !bIso) return null;
+  const a = new Date(aIso + "T00:00:00");
+  const b = new Date(bIso + "T00:00:00");
+  return Math.round((b - a) / (1000 * 60 * 60 * 24));
+}
+
+// Add N days to an ISO date string — uses the addDays() helper defined above
+function recalcNextCheckIn(lead) {
+  if (!lead.checkInCadenceDays || lead.checkInCadenceDays <= 0) {
+    return { ...lead, nextCheckIn: "" };
+  }
+  const base = lead.lastCheckIn || formatLocalDate(new Date(lead.createdAt || Date.now()));
+  return { ...lead, nextCheckIn: addDays(base, lead.checkInCadenceDays) };
+}
+
+// Status of a check-in: returns { kind, daysOff, label, color }.
+// kind: 'none' | 'upcoming' | 'today' | 'overdue'
+function checkInStatus(lead) {
+  if (!lead.checkInCadenceDays || !lead.nextCheckIn) {
+    return { kind: "none", daysOff: null, label: "", color: "" };
+  }
+  const today = formatLocalDate(new Date());
+  const days = daysBetween(today, lead.nextCheckIn);
+  if (days === null) return { kind: "none", daysOff: null, label: "", color: "" };
+  if (days < 0) {
+    const abs = Math.abs(days);
+    return { kind: "overdue", daysOff: days, label: `${abs} day${abs === 1 ? "" : "s"} overdue`, color: "var(--accent)" };
+  }
+  if (days === 0) {
+    return { kind: "today", daysOff: 0, label: "Check in today", color: "var(--accent)" };
+  }
+  if (days <= 3) {
+    return { kind: "upcoming", daysOff: days, label: `Check in ${days} day${days === 1 ? "" : "s"}`, color: "#a86b1f" };
+  }
+  return { kind: "scheduled", daysOff: days, label: `Check in ${fmtDateShort(lead.nextCheckIn)}`, color: "var(--ink-soft)" };
+}
+
+// Small status pill shown on lead cards + the home widget
+function CheckInPill({ lead, compact }) {
+  const status = checkInStatus(lead);
+  if (status.kind === "none") return null;
+  const bgByKind = {
+    overdue: "rgba(196, 96, 47, 0.12)",
+    today: "rgba(196, 96, 47, 0.08)",
+    upcoming: "rgba(168, 107, 31, 0.08)",
+    scheduled: "var(--paper-soft)",
+  };
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      padding: compact ? "2px 6px" : "3px 8px",
+      borderRadius: 4,
+      background: bgByKind[status.kind] || "var(--paper-soft)",
+      color: status.color,
+      fontSize: compact ? 10 : 11,
+      fontWeight: 600,
+      letterSpacing: "0.02em",
+    }}>
+      {status.kind === "overdue" || status.kind === "today" ? "🔴" : status.kind === "upcoming" ? "🟡" : "🟢"}
+      <span>{status.label}</span>
+    </div>
+  );
+}
+
+// Returns all leads (from Future Listings + Future Buyers, local OR cloud)
+// that have a check-in due within the next N days OR are overdue.
+function getLeadsNeedingCheckIn(futureListings, futureBuyers, windowDays = 7) {
+  const all = [];
+  futureListings.forEach(l => {
+    const status = checkInStatus(l);
+    if (status.kind === "overdue" || status.kind === "today" || (status.kind === "upcoming" && status.daysOff <= windowDays) ||
+        (status.kind === "scheduled" && status.daysOff <= windowDays)) {
+      all.push({ ...l, _leadType: "futureListing", _status: status });
+    }
+  });
+  futureBuyers.forEach(b => {
+    const status = checkInStatus(b);
+    if (status.kind === "overdue" || status.kind === "today" || (status.kind === "upcoming" && status.daysOff <= windowDays) ||
+        (status.kind === "scheduled" && status.daysOff <= windowDays)) {
+      all.push({ ...b, _leadType: "futureBuyer", _status: status });
+    }
+  });
+  // Sort: overdue first (most overdue at top), then today, then upcoming by date
+  return all.sort((a, b) => {
+    const aDays = a._status.daysOff;
+    const bDays = b._status.daysOff;
+    if (aDays === null) return 1;
+    if (bDays === null) return -1;
+    return aDays - bDays;
+  });
+}
+
+// The "Check in" panel rendered inside the lead's edit modal. Includes the
+// cadence picker, "I checked in today" button, and history.
+function CheckInPanel({ lead, onChange }) {
+  const [showNote, setShowNote] = useState(false);
+  const [note, setNote] = useState("");
+
+  const updateCadence = (cadenceDays) => {
+    const next = recalcNextCheckIn({ ...lead, checkInCadenceDays: cadenceDays });
+    onChange(next);
+  };
+
+  const recordCheckIn = (withNote) => {
+    const today = formatLocalDate(new Date());
+    const entry = { id: newId(), date: today, note: withNote || "" };
+    const history = [entry, ...(lead.checkInHistory || [])];
+    const updated = recalcNextCheckIn({ ...lead, lastCheckIn: today, checkInHistory: history });
+    onChange(updated);
+    setShowNote(false);
+    setNote("");
+  };
+
+  const removeHistoryEntry = (id) => {
+    if (!confirm("Remove this check-in entry?")) return;
+    onChange({ ...lead, checkInHistory: (lead.checkInHistory || []).filter(h => h.id !== id) });
+  };
+
+  const status = checkInStatus(lead);
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 10, padding: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600 }}>
+            Check-in cadence
+          </div>
+          {status.kind !== "none" && <CheckInPill lead={lead} />}
+        </div>
+
+        <select
+          value={lead.checkInCadenceDays || 0}
+          onChange={(e) => updateCadence(parseInt(e.target.value, 10))}
+          style={{ ...styles.input, padding: "7px 10px", fontSize: 13 }}
+        >
+          {CHECK_IN_CADENCE_OPTIONS.map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+
+        {lead.checkInCadenceDays > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                onClick={() => recordCheckIn("")}
+                style={{ ...styles.btn, ...styles.btnPrimary, padding: "8px 14px", fontSize: 13 }}
+                title="Mark check-in done; auto-rolls next-check-in date forward"
+              >
+                <CheckCircle2 size={13} /> Checked in today
+              </button>
+              <button
+                onClick={() => setShowNote(!showNote)}
+                style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 12px", fontSize: 12 }}
+              >
+                + with note
+              </button>
+              {lead.lastCheckIn && (
+                <span style={{ fontSize: 11, color: "var(--ink-soft)", marginLeft: "auto" }}>
+                  Last: {fmtDate(lead.lastCheckIn)}
+                </span>
+              )}
+            </div>
+            {showNote && (
+              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                <input
+                  type="text"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); recordCheckIn(note); } }}
+                  placeholder="What was discussed?"
+                  style={{ ...styles.input, padding: "7px 10px", fontSize: 13 }}
+                  autoFocus
+                />
+                <button
+                  onClick={() => recordCheckIn(note)}
+                  style={{ ...styles.btn, ...styles.btnPrimary, padding: "7px 14px", fontSize: 12 }}
+                >
+                  Save
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {(lead.checkInHistory || []).length > 0 && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ink-line)" }}>
+            <div style={{ fontSize: 11, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 600, marginBottom: 6 }}>
+              Check-in history
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 200, overflowY: "auto" }}>
+              {(lead.checkInHistory || []).map(h => (
+                <div key={h.id} style={{ display: "flex", gap: 10, padding: "6px 8px", background: "var(--paper)", borderRadius: 6, alignItems: "flex-start" }}>
+                  <div style={{ fontSize: 11, color: "var(--ink-soft)", whiteSpace: "nowrap", paddingTop: 2, minWidth: 70 }}>
+                    {fmtDateShort(h.date)}
+                  </div>
+                  <div style={{ flex: 1, fontSize: 13, color: "var(--ink)" }}>
+                    {h.note || <span style={{ color: "var(--ink-soft)", fontStyle: "italic" }}>(no note)</span>}
+                  </div>
+                  <button onClick={() => removeHistoryEntry(h.id)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 2, cursor: "pointer" }}>
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // FUTURE LISTINGS — properties you might list (lead pipeline before contract)
 // ════════════════════════════════════════════════════════════════════════════
 const FUTURE_LISTINGS_KEY = "jct_future_listings";
@@ -2796,6 +3233,16 @@ function FutureListingCountBadge() {
   return count > 0 ? <span style={styles.tabCount}>{count}</span> : null;
 }
 
+const PROPERTY_TYPE_OPTIONS = [
+  "Single Family",
+  "Condo",
+  "Townhome",
+  "Manufactured",
+  "Land",
+  "Multi-family",
+  "Other",
+];
+
 function newFutureListing() {
   return {
     id: `fl_${newId()}`,
@@ -2804,7 +3251,20 @@ function newFutureListing() {
     referredBy: "",
     estimatedPrice: "",
     targetListDate: "",
+    // Property details — all optional. Strings to allow blank vs 0.
+    parcelNumber: "",
+    propertyType: "",      // Single Family, Condo, Townhome, Manufactured, Land, Multi-family
+    yearBuilt: "",
+    beds: "",
+    baths: "",             // allow decimals like "2.5"
+    sqft: "",              // living area
+    lotSize: "",           // raw number
+    lotUnit: "sqft",       // "sqft" or "acres"
     notes: "",
+    checkInCadenceDays: 0,   // 0 = no auto-reminders
+    lastCheckIn: "",          // ISO date of most recent check-in
+    nextCheckIn: "",          // ISO date (calculated from lastCheckIn + cadence, or manual override)
+    checkInHistory: [],       // [{ id, date, note }]
     createdAt: new Date().toISOString(),
   };
 }
@@ -2846,11 +3306,27 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
   };
   const convertToListing = (item) => {
     if (!confirm("Convert this to an active Listing Transaction? It'll stay in Future Listings until you remove it.")) return;
+
+    // Pack any property details into the converted listing's notes so the info
+    // isn't lost. Property detail fields live only on Future Listings.
+    const detailLines = [];
+    if (item.propertyType) detailLines.push(`Type: ${item.propertyType}`);
+    if (item.parcelNumber) detailLines.push(`Parcel #: ${item.parcelNumber}`);
+    if (item.yearBuilt) detailLines.push(`Year built: ${item.yearBuilt}`);
+    if (item.beds) detailLines.push(`Beds: ${item.beds}`);
+    if (item.baths) detailLines.push(`Baths: ${item.baths}`);
+    if (item.sqft) detailLines.push(`Living sqft: ${item.sqft}`);
+    if (item.lotSize) detailLines.push(`Lot: ${item.lotSize} ${item.lotUnit || "sqft"}`);
+
+    const oldNotesLine = item.notes ? `\n\nFrom Future Listings: ${item.notes}` : "";
+    const detailsLine = detailLines.length ? `\n\nProperty details:\n${detailLines.join("\n")}` : "";
+    const combinedNotes = (detailsLine + oldNotesLine).trim();
+
     onConvertToListing({
       address: item.address, city: item.city, state: item.state, zip: item.zip,
       sellerName: item.ownerName, sellerPhone: item.ownerPhone, sellerEmail: item.ownerEmail,
       listPrice: item.estimatedPrice,
-      notes: item.notes ? `From Future Listings: ${item.notes}` : "",
+      notes: combinedNotes,
     });
   };
 
@@ -2906,11 +3382,22 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
                 <div style={{ ...styles.typePill, background: "transparent", color: "var(--ink-soft)", border: "1px dashed var(--ink-line)" }}>
                   FUTURE
                 </div>
+                <CheckInPill lead={item} compact />
               </div>
               <div style={styles.cardAddress}>
                 {item.address || <span style={{ color: "var(--ink-soft)" }}>No address</span>}
               </div>
               <div style={styles.cardCity}>{[item.city, item.state].filter(Boolean).join(", ") || "—"}</div>
+              {(item.beds || item.baths || item.sqft || item.propertyType) && (
+                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 8, marginTop: -4 }}>
+                  {[
+                    item.beds && `${item.beds} bd`,
+                    item.baths && `${item.baths} ba`,
+                    item.sqft && `${Number(item.sqft).toLocaleString()} sqft`,
+                    item.propertyType,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+              )}
               <div style={styles.cardRow}>
                 <span style={{ color: "var(--ink-soft)" }}>Owner</span>
                 <span style={{ fontWeight: 500 }}>{item.ownerName || "—"}</span>
@@ -2993,11 +3480,50 @@ function FutureListingModal({ item, onClose, onSave, onRemove, onConvert, isNew 
             </Field>
           </FormSection>
 
+          <FormSection title="Property Details" icon={Home}>
+            <Field label="Property Type">
+              <select value={form.propertyType} onChange={(e) => update("propertyType", e.target.value)} style={styles.input}>
+                <option value="">—</option>
+                {PROPERTY_TYPE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            </Field>
+            <Field label="Parcel #">
+              <input type="text" value={form.parcelNumber} onChange={(e) => update("parcelNumber", e.target.value)} style={styles.input} placeholder="e.g. 12345-678-901" />
+            </Field>
+            <Field label="Year Built">
+              <input type="number" value={form.yearBuilt} onChange={(e) => update("yearBuilt", e.target.value)} style={styles.input} placeholder="1998" min="1700" max="2100" />
+            </Field>
+            <Field label="Living Sqft">
+              <input type="number" value={form.sqft} onChange={(e) => update("sqft", e.target.value)} style={styles.input} placeholder="1850" min="0" />
+            </Field>
+            <Field label="Beds">
+              <input type="number" value={form.beds} onChange={(e) => update("beds", e.target.value)} style={styles.input} placeholder="3" min="0" max="20" />
+            </Field>
+            <Field label="Baths">
+              <input type="number" value={form.baths} onChange={(e) => update("baths", e.target.value)} style={styles.input} placeholder="2.5" min="0" max="20" step="0.5" />
+            </Field>
+            <Field label="Lot Size" full>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input type="number" value={form.lotSize} onChange={(e) => update("lotSize", e.target.value)} style={{ ...styles.input, flex: 1 }} placeholder="7500" min="0" step="0.01" />
+                <select value={form.lotUnit || "sqft"} onChange={(e) => update("lotUnit", e.target.value)} style={{ ...styles.input, width: 100 }}>
+                  <option value="sqft">sqft</option>
+                  <option value="acres">acres</option>
+                </select>
+              </div>
+            </Field>
+          </FormSection>
+
           <FormSection title="Notes" icon={FileText}>
             <Field full>
               <textarea value={form.notes} onChange={(e) => update("notes", e.target.value)}
                 style={{ ...styles.input, minHeight: 100, resize: "vertical", fontFamily: "var(--font-body)" }}
                 placeholder="Conversation notes, follow-up needs, hesitations, what they want, comp info, anything…" />
+            </Field>
+          </FormSection>
+
+          <FormSection title="Check-In Reminders" icon={Bell}>
+            <Field full>
+              <CheckInPanel lead={form} onChange={setForm} />
             </Field>
           </FormSection>
         </div>
@@ -3058,6 +3584,10 @@ function newFutureBuyer() {
     lender: { name: "", company: "", phone: "", email: "" },
     lookingFor: "",
     notes: "",
+    checkInCadenceDays: 0,
+    lastCheckIn: "",
+    nextCheckIn: "",
+    checkInHistory: [],
     createdAt: new Date().toISOString(),
   };
 }
@@ -3172,6 +3702,7 @@ function FutureBuyers({ onConvertToBuyer, cloudItems, onCloudSave, onCloudRemove
                     PRE-APPROVED
                   </div>
                 )}
+                <CheckInPill lead={item} compact />
               </div>
               <div style={styles.cardAddress}>
                 {item.name || <span style={{ color: "var(--ink-soft)" }}>No name</span>}
@@ -3300,6 +3831,12 @@ function FutureBuyerModal({ item, onClose, onSave, onRemove, onConvert, isNew })
               <textarea value={form.notes} onChange={(e) => update("notes", e.target.value)}
                 style={{ ...styles.input, minHeight: 90, resize: "vertical", fontFamily: "var(--font-body)" }}
                 placeholder="Conversation history, showing notes, hesitations, follow-up needs…" />
+            </Field>
+          </FormSection>
+
+          <FormSection title="Check-In Reminders" icon={Bell}>
+            <Field full>
+              <CheckInPanel lead={form} onChange={setForm} />
             </Field>
           </FormSection>
         </div>
@@ -3592,6 +4129,562 @@ function newVendor() {
   };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// TO-DOS — dedicated tab with multiple named lists + per-item reminders
+// ════════════════════════════════════════════════════════════════════════════
+const TODO_LISTS_KEY = "jct_todo_lists_v1";
+
+const TODO_FREQUENCY_OPTIONS = [
+  { value: 1, label: "Every day" },
+  { value: 3, label: "Every 3 days" },
+  { value: 7, label: "Every week" },
+  { value: 14, label: "Every 2 weeks" },
+  { value: 30, label: "Every month" },
+];
+
+// Calculate when the next reminder should fire for a to-do item.
+// Returns ISO date string or "" if no active reminder.
+function calcNextReminder(todo) {
+  if (!todo.reminderType || todo.reminderType === "none") return "";
+  if (todo.reminderType === "date") {
+    return todo.reminderDate || "";
+  }
+  if (todo.reminderType === "frequency" && todo.reminderDays > 0) {
+    const base = todo.lastReminded || todo.createdAt?.split("T")[0] || formatLocalDate(new Date());
+    return addDays(base, todo.reminderDays);
+  }
+  return "";
+}
+
+// Status: { kind: 'none' | 'overdue' | 'today' | 'upcoming' | 'scheduled', label, color, days }
+function todoReminderStatus(todo) {
+  const next = calcNextReminder(todo);
+  if (!next || todo.complete) return { kind: "none", label: "", color: "", days: null };
+  const today = formatLocalDate(new Date());
+  const days = daysBetween(today, next);
+  if (days === null) return { kind: "none", label: "", color: "", days: null };
+  if (days < 0) {
+    const abs = Math.abs(days);
+    return { kind: "overdue", days, label: `${abs}d overdue`, color: "var(--accent)" };
+  }
+  if (days === 0) return { kind: "today", days, label: "Today", color: "var(--accent)" };
+  if (days <= 3) return { kind: "upcoming", days, label: `In ${days}d`, color: "#a86b1f" };
+  return { kind: "scheduled", days, label: fmtDateShort(next), color: "var(--ink-soft)" };
+}
+
+// Aggregates due/overdue/upcoming reminders across all lists, for the home widget.
+function collectDueReminders(lists, windowDays = 7) {
+  const all = [];
+  (lists || []).forEach(list => {
+    (list.items || []).forEach(item => {
+      const status = todoReminderStatus(item);
+      if (status.kind === "overdue" || status.kind === "today" || (status.days !== null && status.days <= windowDays)) {
+        all.push({ list, item, status });
+      }
+    });
+  });
+  return all.sort((a, b) => (a.status.days ?? 9999) - (b.status.days ?? 9999));
+}
+
+function TodosTab() {
+  const [lists, setLists] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [newListName, setNewListName] = useState("");
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(TODO_LISTS_KEY);
+      if (stored) setLists(JSON.parse(stored));
+    } catch (e) {}
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(lists)); }
+    catch (e) {}
+  }, [lists, loaded]);
+
+  const addList = () => {
+    const name = newListName.trim();
+    if (!name) return;
+    setLists([...lists, { id: newId(), name, createdAt: new Date().toISOString(), items: [] }]);
+    setNewListName("");
+  };
+
+  const removeList = (id) => {
+    if (!confirm("Delete this list and all its to-dos?")) return;
+    setLists(lists.filter(l => l.id !== id));
+  };
+
+  const renameList = (id) => {
+    const list = lists.find(l => l.id === id);
+    const name = prompt("Rename list:", list.name);
+    if (!name || name.trim() === list.name) return;
+    setLists(lists.map(l => l.id === id ? { ...l, name: name.trim() } : l));
+  };
+
+  const updateList = (id, updates) => {
+    setLists(lists.map(l => l.id === id ? { ...l, ...updates } : l));
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ ...styles.pageTitle, marginBottom: 4 }}>To-Dos</h1>
+          <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
+            {lists.length === 0 ? "No lists yet. Create your first one below." : `${lists.length} list${lists.length === 1 ? "" : "s"}`}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <input
+          type="text"
+          value={newListName}
+          onChange={(e) => setNewListName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addList(); } }}
+          placeholder="New list name (e.g. Follow-ups, This Week, Personal…)"
+          style={{ ...styles.input, flex: 1 }}
+        />
+        <button onClick={addList} style={{ ...styles.btn, ...styles.btnPrimary }}>
+          <Plus size={14} /> Add List
+        </button>
+      </div>
+
+      {lists.map(list => (
+        <TodoListBlock
+          key={list.id}
+          list={list}
+          onUpdate={(updates) => updateList(list.id, updates)}
+          onRemove={() => removeList(list.id)}
+          onRename={() => renameList(list.id)}
+        />
+      ))}
+
+      {lists.length === 0 && (
+        <div style={{ padding: "60px 20px", textAlign: "center", color: "var(--ink-soft)", background: "var(--paper-soft)", border: "1px dashed var(--ink-line)", borderRadius: 12 }}>
+          <CheckCircle2 size={28} style={{ opacity: 0.3, marginBottom: 10 }} /><br/>
+          Create a list above to get started. Each list can hold to-dos with optional reminders.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TodoListBlock({ list, onUpdate, onRemove, onRename }) {
+  const [newItemText, setNewItemText] = useState("");
+  const [editingReminder, setEditingReminder] = useState(null); // item id or null
+
+  const addItem = () => {
+    const text = newItemText.trim();
+    if (!text) return;
+    const newItem = {
+      id: newId(),
+      text,
+      complete: false,
+      reminderType: "none",
+      reminderDays: 0,
+      reminderDate: "",
+      lastReminded: "",
+      createdAt: new Date().toISOString(),
+    };
+    onUpdate({ items: [...(list.items || []), newItem] });
+    setNewItemText("");
+  };
+
+  const updateItem = (id, updates) => {
+    onUpdate({ items: list.items.map(i => i.id === id ? { ...i, ...updates } : i) });
+  };
+
+  const removeItem = (id) => {
+    onUpdate({ items: list.items.filter(i => i.id !== id) });
+  };
+
+  const toggleComplete = (id) => {
+    const item = list.items.find(i => i.id === id);
+    updateItem(id, { complete: !item.complete });
+  };
+
+  const editItemText = (id) => {
+    const item = list.items.find(i => i.id === id);
+    const text = prompt("Edit to-do:", item.text);
+    if (text && text.trim() !== item.text) updateItem(id, { text: text.trim() });
+  };
+
+  const activeItems = (list.items || []).filter(i => !i.complete);
+  const doneItems = (list.items || []).filter(i => i.complete);
+
+  return (
+    <div style={{ background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12, padding: 18, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 600, color: "var(--ink)", margin: 0 }}>
+          {list.name}
+          <span style={{ color: "var(--ink-soft)", fontSize: 13, fontWeight: 400, marginLeft: 8 }}>
+            {activeItems.length} active{doneItems.length > 0 ? ` · ${doneItems.length} done` : ""}
+          </span>
+        </h2>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={onRename} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 6, cursor: "pointer" }} title="Rename list">
+            <Edit3 size={14} />
+          </button>
+          <button onClick={onRemove} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 6, cursor: "pointer" }} title="Delete list">
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+        {activeItems.map(item => (
+          <TodoItem
+            key={item.id}
+            item={item}
+            onToggle={() => toggleComplete(item.id)}
+            onEdit={() => editItemText(item.id)}
+            onRemove={() => removeItem(item.id)}
+            onSetReminder={(updates) => updateItem(item.id, updates)}
+            reminderOpen={editingReminder === item.id}
+            onToggleReminder={() => setEditingReminder(editingReminder === item.id ? null : item.id)}
+          />
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          type="text"
+          value={newItemText}
+          onChange={(e) => setNewItemText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addItem(); } }}
+          placeholder="Add a to-do…"
+          style={{ ...styles.input, flex: 1, fontSize: 13 }}
+        />
+        <button onClick={addItem} style={{ ...styles.btn, ...styles.btnGhost, padding: "6px 10px" }}>
+          <Plus size={14} />
+        </button>
+      </div>
+
+      {doneItems.length > 0 && (
+        <details style={{ marginTop: 14, fontSize: 12 }}>
+          <summary style={{ cursor: "pointer", color: "var(--ink-soft)", padding: "6px 0" }}>
+            Show completed ({doneItems.length})
+          </summary>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+            {doneItems.map(item => (
+              <TodoItem
+                key={item.id}
+                item={item}
+                onToggle={() => toggleComplete(item.id)}
+                onEdit={() => editItemText(item.id)}
+                onRemove={() => removeItem(item.id)}
+                onSetReminder={(updates) => updateItem(item.id, updates)}
+                reminderOpen={false}
+                onToggleReminder={() => {}}
+              />
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function TodoItem({ item, onToggle, onEdit, onRemove, onSetReminder, reminderOpen, onToggleReminder }) {
+  const status = todoReminderStatus(item);
+
+  return (
+    <div style={{ background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8, padding: "8px 10px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <input
+          type="checkbox"
+          checked={item.complete}
+          onChange={onToggle}
+          style={{ cursor: "pointer", width: 16, height: 16, flexShrink: 0 }}
+        />
+        <span
+          onClick={onEdit}
+          style={{ flex: 1, fontSize: 14, color: "var(--ink)", cursor: "pointer", opacity: item.complete ? 0.55 : 1 }}
+          title="Click to edit"
+        >
+          {item.text}
+        </span>
+        {status.kind !== "none" && (
+          <span style={{ fontSize: 11, fontWeight: 600, color: status.color, padding: "2px 7px", borderRadius: 4, background: status.kind === "overdue" || status.kind === "today" ? "rgba(196, 96, 47, 0.1)" : "var(--paper-soft)", whiteSpace: "nowrap" }}>
+            🔔 {status.label}
+          </span>
+        )}
+        <button onClick={onToggleReminder} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Set reminder">
+          <Bell size={13} />
+        </button>
+        <button onClick={onRemove} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Delete">
+          <X size={13} />
+        </button>
+      </div>
+
+      {reminderOpen && (
+        <div style={{ marginTop: 10, padding: 10, background: "var(--paper-soft)", borderRadius: 6, fontSize: 12 }}>
+          <div style={{ marginBottom: 8, fontWeight: 600, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.08em", fontSize: 10 }}>Reminder</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={() => onSetReminder({ reminderType: "none", reminderDays: 0, reminderDate: "" })}
+              style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid var(--ink-line)", background: item.reminderType === "none" ? "var(--ink)" : "var(--paper)", color: item.reminderType === "none" ? "var(--paper)" : "var(--ink)", cursor: "pointer", fontSize: 12 }}
+            >
+              None
+            </button>
+            <button
+              onClick={() => onSetReminder({ reminderType: "date", reminderDays: 0 })}
+              style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid var(--ink-line)", background: item.reminderType === "date" ? "var(--ink)" : "var(--paper)", color: item.reminderType === "date" ? "var(--paper)" : "var(--ink)", cursor: "pointer", fontSize: 12 }}
+            >
+              Specific date
+            </button>
+            <button
+              onClick={() => onSetReminder({ reminderType: "frequency", reminderDate: "" })}
+              style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid var(--ink-line)", background: item.reminderType === "frequency" ? "var(--ink)" : "var(--paper)", color: item.reminderType === "frequency" ? "var(--paper)" : "var(--ink)", cursor: "pointer", fontSize: 12 }}
+            >
+              Recurring
+            </button>
+          </div>
+
+          {item.reminderType === "date" && (
+            <input
+              type="date"
+              value={item.reminderDate || ""}
+              onChange={(e) => onSetReminder({ reminderDate: e.target.value })}
+              style={{ ...styles.input, fontSize: 13, padding: "6px 8px" }}
+            />
+          )}
+
+          {item.reminderType === "frequency" && (
+            <select
+              value={item.reminderDays || 7}
+              onChange={(e) => onSetReminder({ reminderDays: parseInt(e.target.value, 10) })}
+              style={{ ...styles.input, fontSize: 13, padding: "6px 8px" }}
+            >
+              {TODO_FREQUENCY_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Home widget: To-Do Reminders ────────────────────────────────────────────
+function TodoRemindersWidget({ onGoToView }) {
+  const [lists, setLists] = useState([]);
+
+  useEffect(() => {
+    const reload = () => {
+      try {
+        const stored = localStorage.getItem(TODO_LISTS_KEY);
+        setLists(stored ? JSON.parse(stored) : []);
+      } catch (e) { setLists([]); }
+    };
+    reload();
+    const id = setInterval(reload, 3000);
+    return () => clearInterval(id);
+  }, []);
+
+  const due = collectDueReminders(lists, 7);
+
+  // Acknowledge a recurring reminder — bumps lastReminded so nextReminder rolls forward
+  const acknowledge = (listId, itemId) => {
+    const today = formatLocalDate(new Date());
+    const next = lists.map(l => l.id !== listId ? l : {
+      ...l,
+      items: l.items.map(i => i.id !== itemId ? i : (
+        i.reminderType === "frequency" ? { ...i, lastReminded: today } : { ...i, reminderType: "none" }
+      )),
+    });
+    setLists(next);
+    try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(next)); } catch (e) {}
+  };
+
+  return (
+    <div>
+      <div style={styles.sectionTitleRow}>
+        <h2 style={styles.sectionTitle}>To-Do Reminders</h2>
+        {due.length > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{due.length} due</div>}
+      </div>
+      <div style={{ background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12, overflow: "hidden" }}>
+        {due.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", color: "var(--ink-soft)", fontSize: 13 }}>
+            <CheckCircle2 size={18} style={{ opacity: 0.4, marginBottom: 6 }} /><br/>
+            No reminders due. Set reminders in the To-Dos tab.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {due.map(({ list, item, status }) => (
+              <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--ink-line)" }}>
+                <div style={{
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: status.kind === "overdue" || status.kind === "today" ? "var(--accent)" : status.kind === "upcoming" ? "#a86b1f" : "var(--ink-soft)",
+                  flexShrink: 0,
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {item.text}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                    {list.name} · {status.label}
+                  </div>
+                </div>
+                <button
+                  onClick={() => acknowledge(list.id, item.id)}
+                  style={{ ...styles.btn, ...styles.btnGhost, padding: "3px 9px", fontSize: 11 }}
+                  title={item.reminderType === "frequency" ? "Mark done for now — reminder will roll forward" : "Dismiss reminder"}
+                >
+                  Done
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() => onGoToView && onGoToView("todos")}
+              style={{ padding: "8px 14px", border: "none", background: "transparent", color: "var(--ink-soft)", fontSize: 12, cursor: "pointer", textAlign: "center" }}
+            >
+              Open To-Dos tab →
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Formats a vendor's contact info for copy-paste into email/text.
+function formatVendorContact(v) {
+  const lines = [];
+  if (v.name) lines.push(v.name);
+  if (v.company) lines.push(v.company);
+  if (v.phone) lines.push(v.phone);
+  if (v.email) lines.push(v.email);
+  return lines.join("\n");
+}
+
+// Formats multiple vendors as one combined block.
+function formatVendorContactList(vendors) {
+  return vendors.map(formatVendorContact).join("\n\n———\n\n");
+}
+
+// Modal that pops up showing vendor contact info ready to copy.
+// Shows a big textarea pre-selected, plus a Copy button.
+function VendorSendModal({ vendors, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const textareaRef = useRef(null);
+  const text = formatVendorContactList(vendors);
+
+  // Auto-select the textarea content when the modal opens so user can
+  // just hit Cmd/Ctrl+C immediately.
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.select();
+    }
+  }, []);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    } catch (e) {
+      // Fallback: tell the user to copy manually from the textarea
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.select();
+      }
+      alert("Clipboard access blocked — please press Cmd+C (or Ctrl+C) to copy the highlighted text.");
+    }
+  };
+
+  return (
+    <div style={styles.modalBackdrop} onClick={onClose}>
+      <div style={{ ...styles.modal, maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div>
+            <div style={styles.eyebrow}>Vendor Contacts</div>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--ink)" }}>
+              {vendors.length === 1 ? "Send Contact" : `Send ${vendors.length} Contacts`}
+            </div>
+          </div>
+          <button onClick={onClose} style={styles.iconBtn}><X size={18} /></button>
+        </div>
+        <div style={styles.modalBody}>
+          <div style={{ fontSize: 13, color: "var(--ink-soft)", marginBottom: 10 }}>
+            The contact info is ready below. Tap "Copy to Clipboard" or select the text and copy manually, then paste into your email or text.
+          </div>
+          <textarea
+            ref={textareaRef}
+            readOnly
+            value={text}
+            style={{
+              ...styles.input,
+              minHeight: 220,
+              fontFamily: "var(--font-body)",
+              fontSize: 13,
+              lineHeight: 1.5,
+              resize: "vertical",
+            }}
+            onClick={(e) => e.target.select()}
+          />
+        </div>
+        <div style={styles.modalFooter}>
+          <div style={{ flex: 1 }} />
+          <button onClick={onClose} style={{ ...styles.btn, ...styles.btnGhost }}>Close</button>
+          <button
+            onClick={handleCopy}
+            style={{
+              ...styles.btn,
+              ...styles.btnPrimary,
+              background: copied ? "var(--accent)" : undefined,
+            }}
+          >
+            {copied ? <><CheckCircle2 size={14} /> Copied!</> : <><Send size={14} /> Copy to Clipboard</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Inline "Send" button on each vendor card. Click → opens the popup with this vendor.
+function SendVendorButton({ vendor }) {
+  const [showModal, setShowModal] = useState(false);
+
+  const handleClick = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setShowModal(true);
+  };
+
+  return (
+    <>
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={handleClick}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleClick(e); }}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
+          padding: "4px 10px", fontSize: 11, fontWeight: 500,
+          borderRadius: 6, border: "1px solid var(--ink-line)",
+          background: "var(--paper)",
+          color: "var(--ink)",
+          cursor: "pointer", userSelect: "none",
+        }}
+        title="Show contact info to copy/send"
+      >
+        <Send size={11} /> Send
+      </span>
+      {showModal && <VendorSendModal vendors={[vendor]} onClose={() => setShowModal(false)} />}
+    </>
+  );
+}
+
 function Vendors({ cloudItems, onCloudSave, onCloudRemove, isCloud }) {
   const [localItems, setLocalItems] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -3599,6 +4692,7 @@ function Vendors({ cloudItems, onCloudSave, onCloudRemove, isCloud }) {
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
   const [filterCat, setFilterCat] = useState("");
+  const [selectedIds, setSelectedIds] = useState(new Set());
 
   useEffect(() => {
     if (isCloud) { setLoaded(true); return; }
@@ -3614,8 +4708,14 @@ function Vendors({ cloudItems, onCloudSave, onCloudRemove, isCloud }) {
     if (isCloud) {
       await onCloudSave(v);
     } else {
-      const exists = localItems.find(i => i.id === v.id);
-      setLocalItems(exists ? localItems.map(i => i.id === v.id ? v : i) : [...localItems, v]);
+      // Functional update to avoid stale closures
+      setLocalItems(prev => {
+        const exists = prev.find(i => i.id === v.id);
+        const next = exists ? prev.map(i => i.id === v.id ? v : i) : [...prev, v];
+        // Save immediately for reliability
+        try { localStorage.setItem(VENDORS_KEY, JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
     }
     setEditing(null);
   };
@@ -3624,9 +4724,40 @@ function Vendors({ cloudItems, onCloudSave, onCloudRemove, isCloud }) {
     if (isCloud) {
       await onCloudRemove(id);
     } else {
-      setLocalItems(localItems.filter(i => i.id !== id));
+      // Functional update + immediate save — avoids any stale state issues
+      setLocalItems(prev => {
+        const next = prev.filter(i => i.id !== id);
+        try { localStorage.setItem(VENDORS_KEY, JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
     }
+    // Also remove from selection if it was selected
+    setSelectedIds(prev => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     setEditing(null);
+  };
+
+  // ─── Multi-select helpers ──────────────────────────────────────────────
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+  const selectedVendors = items.filter(v => selectedIds.has(v.id));
+
+  // Open the contact popup with multiple selected vendors.
+  const [showBulkSendModal, setShowBulkSendModal] = useState(false);
+  const sendSelected = () => {
+    if (selectedVendors.length === 0) return;
+    setShowBulkSendModal(true);
   };
 
   const filtered = items.filter(v => {
@@ -3695,34 +4826,64 @@ function Vendors({ cloudItems, onCloudSave, onCloudRemove, isCloud }) {
             <div key={cat} style={{ marginBottom: 28 }}>
               <h2 style={{ ...styles.sectionTitle, fontSize: 16, color: "var(--ink-soft)" }}>{cat}</h2>
               <div style={styles.cardGrid}>
-                {list.map(v => (
-                  <button key={v.id} onClick={() => setEditing(v)} style={styles.card} data-card="true">
-                    <div style={styles.cardAddress}>{v.name || "(no name)"}</div>
-                    {v.company && <div style={styles.cardCity}>{v.company}</div>}
-                    {v.phone && (
-                      <a href={`tel:${v.phone}`} onClick={(e) => e.stopPropagation()}
-                        style={{ display: "block", marginTop: 8, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
-                        📞 {v.phone}
-                      </a>
-                    )}
-                    {v.email && (
-                      <a href={`mailto:${v.email}`} onClick={(e) => e.stopPropagation()}
-                        style={{ display: "block", marginTop: 4, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
-                        ✉ {v.email}
-                      </a>
-                    )}
-                    {v.rating > 0 && (
-                      <div style={{ marginTop: 8, color: "var(--accent)", fontSize: 14 }}>
-                        {"★".repeat(v.rating)}{"☆".repeat(5 - v.rating)}
+                {list.map(v => {
+                  const isSelected = selectedIds.has(v.id);
+                  return (
+                  <div key={v.id} style={{ position: "relative" }}>
+                    <button onClick={() => setEditing(v)} style={{ ...styles.card, paddingTop: 32, ...(isSelected ? { borderColor: "var(--accent)", boxShadow: "0 0 0 1px var(--accent)" } : {}) }} data-card="true">
+                      <div style={styles.cardAddress}>{v.name || "(no name)"}</div>
+                      {v.company && <div style={styles.cardCity}>{v.company}</div>}
+                      {v.phone && (
+                        <a href={`tel:${v.phone}`} onClick={(e) => e.stopPropagation()}
+                          style={{ display: "block", marginTop: 8, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
+                          📞 {v.phone}
+                        </a>
+                      )}
+                      {v.email && (
+                        <a href={`mailto:${v.email}`} onClick={(e) => e.stopPropagation()}
+                          style={{ display: "block", marginTop: 4, fontSize: 13, color: "var(--ink)", textDecoration: "none" }}>
+                          ✉ {v.email}
+                        </a>
+                      )}
+                      {v.rating > 0 && (
+                        <div style={{ marginTop: 8, color: "var(--accent)", fontSize: 14 }}>
+                          {"★".repeat(v.rating)}{"☆".repeat(5 - v.rating)}
+                        </div>
+                      )}
+                      {v.notes && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-soft)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                          {v.notes}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 10, display: "flex", gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                        <SendVendorButton vendor={v} />
                       </div>
-                    )}
-                    {v.notes && (
-                      <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-soft)", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                        {v.notes}
-                      </div>
-                    )}
-                  </button>
-                ))}
+                    </button>
+                    {/* Selection checkbox — overlay, positioned absolutely outside the inner button */}
+                    <label
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: "absolute", top: 8, left: 8, zIndex: 2,
+                        display: "flex", alignItems: "center", gap: 4,
+                        cursor: "pointer", padding: "2px 6px",
+                        borderRadius: 4, background: "var(--paper)",
+                        border: "1px solid " + (isSelected ? "var(--accent)" : "var(--ink-line)"),
+                        fontSize: 11, fontWeight: 500,
+                        color: isSelected ? "var(--accent)" : "var(--ink-soft)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(v.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ margin: 0, cursor: "pointer" }}
+                      />
+                      <span>Select</span>
+                    </label>
+                  </div>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -3736,6 +4897,50 @@ function Vendors({ cloudItems, onCloudSave, onCloudRemove, isCloud }) {
           onSave={saveItem}
           onRemove={() => removeItem(editing.id)}
           isNew={!items.find(i => i.id === editing.id)}
+        />
+      )}
+
+      {/* Floating action bar — appears when 1+ vendors selected */}
+      {selectedVendors.length > 0 && (
+        <div style={{
+          position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+          background: "var(--ink)", color: "var(--paper)",
+          borderRadius: 12, padding: "10px 16px",
+          boxShadow: "0 8px 32px -8px rgba(26, 44, 71, 0.4)",
+          display: "flex", alignItems: "center", gap: 14,
+          fontSize: 13, fontWeight: 500,
+          zIndex: 100,
+        }}>
+          <span>{selectedVendors.length} vendor{selectedVendors.length === 1 ? "" : "s"} selected</span>
+          <button
+            onClick={sendSelected}
+            style={{
+              ...styles.btn,
+              background: "var(--paper)",
+              color: "var(--ink)",
+              padding: "6px 14px", fontSize: 13, fontWeight: 600,
+            }}
+          >
+            <Send size={13} /> Send Selected
+          </button>
+          <button
+            onClick={clearSelection}
+            style={{
+              background: "transparent", border: "1px solid rgba(255,255,255,0.3)",
+              color: "var(--paper)", padding: "6px 12px", borderRadius: 6,
+              cursor: "pointer", fontSize: 13,
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Bulk send modal — opens when Send Selected clicked */}
+      {showBulkSendModal && (
+        <VendorSendModal
+          vendors={selectedVendors}
+          onClose={() => setShowBulkSendModal(false)}
         />
       )}
     </>
@@ -4094,6 +5299,429 @@ function TemplateEditorModal({ kind, onClose }) {
           )}
           <div style={{ flex: 1 }} />
           <button onClick={save} style={{ ...styles.btn, ...styles.btnPrimary }}>Save templates</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMAIL DRAFTING — opens default mail app with pre-filled email via mailto:
+// ════════════════════════════════════════════════════════════════════════════
+
+// Build a milestone list as plain text bullets, sorted by date.
+function buildMilestoneLines(txn) {
+  return (txn.milestones || [])
+    .filter(m => m.date)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(m => `  • ${m.label}: ${fmtDate(m.date)}${m.notes ? ` (${m.notes})` : ""}`)
+    .join("\n");
+}
+
+// Open the default mail app with a pre-filled draft.
+function openMailDraft({ to, subject, body }) {
+  if (!to) {
+    alert("No recipient email available. Please add their email to the transaction first.");
+    return;
+  }
+  const url = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  // Using an anchor click rather than window.location.href because the latter
+  // is blocked in iframes (which is how the artifact runtime renders).
+  // Creating + clicking a real <a> is treated as a user-initiated navigation.
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function draftEmailToOtherAgent(txn) {
+  const isListing = txn.type === "listing";
+  const role = isListing ? "sellingBroker" : "listingBroker";
+  const agent = txn.contacts?.[role];
+  const to = agent?.email || "";
+  const greeting = agent?.name ? `Hi ${agent.name.split(" ")[0]},` : "Hi,";
+  const address = txn.address || "the property";
+  const milestoneLines = buildMilestoneLines(txn);
+
+  const subject = `${address} — Transaction Timeline`;
+  const body = `${greeting}
+
+Looking forward to working with you on ${address}. Here are the key dates from our contract:
+
+${milestoneLines || "(no dates set yet)"}
+
+Please let me know if anything looks off or if you need anything from my side.
+
+Best,
+The Jesse Cope Team`;
+
+  openMailDraft({ to, subject, body });
+}
+
+function draftEmailToEscrow(txn) {
+  const escrow = txn.contacts?.escrow;
+  const to = escrow?.email || "";
+  const greeting = escrow?.name ? `Hi ${escrow.name.split(" ")[0]},` : "Hi,";
+  const address = txn.address || "the property";
+  const milestoneLines = buildMilestoneLines(txn);
+  const buyerLine = txn.buyerName ? `Buyer: ${txn.buyerName}\n` : "";
+  const sellerLine = txn.sellerName ? `Seller: ${txn.sellerName}\n` : "";
+  const priceLine = txn.price ? `Purchase Price: ${fmtMoney(txn.price)}\n` : "";
+
+  const subject = `${address} — Opening Escrow / Key Dates`;
+  const body = `${greeting}
+
+Here's a new transaction we'd like to open escrow on:
+
+Property: ${address}
+${sellerLine}${buyerLine}${priceLine}
+Key dates:
+${milestoneLines || "(no dates set yet)"}
+
+Please confirm receipt and let me know what you need from us.
+
+Thanks,
+The Jesse Cope Team`;
+
+  openMailDraft({ to, subject, body });
+}
+
+function draftEmailToLender(txn) {
+  const lender = txn.contacts?.lender;
+  const to = lender?.email || "";
+  const greeting = lender?.name ? `Hi ${lender.name.split(" ")[0]},` : "Hi,";
+  const address = txn.address || "the property";
+  const milestoneLines = buildMilestoneLines(txn);
+  const buyerLine = txn.buyerName ? `Buyer: ${txn.buyerName}\n` : "";
+  const priceLine = txn.price ? `Purchase Price: ${fmtMoney(txn.price)}\n` : "";
+  const financingLine = txn.financing ? `Financing: ${txn.financing}\n` : "";
+
+  const subject = `${address} — Loan File / Timeline`;
+  const body = `${greeting}
+
+Wanted to make sure you have the contract details for this transaction:
+
+Property: ${address}
+${buyerLine}${priceLine}${financingLine}
+Key dates:
+${milestoneLines || "(no dates set yet)"}
+
+Please confirm timeline and let me know if you need anything from buyer.
+
+Thanks,
+The Jesse Cope Team`;
+
+  openMailDraft({ to, subject, body });
+}
+
+function draftEmailToClient(txn) {
+  const isListing = txn.type === "listing";
+  const clientName = isListing ? txn.sellerName : txn.buyerName;
+  const clientEmail = isListing ? txn.sellerEmail : txn.buyerEmail;
+  const greeting = clientName ? `Hi ${clientName.split(" ")[0]},` : "Hi,";
+  const address = txn.address || "your property";
+  const milestoneLines = buildMilestoneLines(txn);
+
+  const subject = `Your timeline for ${address}`;
+  const body = `${greeting}
+
+Just wanted to make sure you have all the important dates for your transaction at ${address} in one place:
+
+${milestoneLines || "(no dates set yet)"}
+
+You don't have to remember any of these — I'll reach out as each one comes up. But here they are if you'd like to put them on your calendar.
+
+As always, reach out anytime with questions.
+
+Best,
+The Jesse Cope Team`;
+
+  openMailDraft({ to: clientEmail, subject, body });
+}
+
+function DraftEmailButton({ label, hint, available, onClick }) {
+  return (
+    <button
+      onClick={available ? onClick : undefined}
+      disabled={!available}
+      style={{
+        display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
+        padding: "10px 12px",
+        background: available ? "var(--paper)" : "transparent",
+        border: "1px solid var(--ink-line)", borderRadius: 8,
+        cursor: available ? "pointer" : "not-allowed",
+        opacity: available ? 1 : 0.5,
+        textAlign: "left", color: "var(--ink)", transition: "border-color 0.15s",
+      }}
+      title={available ? `Open mail app with draft for ${hint}` : "Add this contact's email first"}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600 }}>
+        <Mail size={12} /> {label}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--ink-soft)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+        {hint}
+      </div>
+    </button>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENT STORAGE
+// Files stored as base64 in localStorage under separate keys (small files only).
+// Will auto-migrate to Supabase Storage in Phase 2B.
+// ════════════════════════════════════════════════════════════════════════════
+const DOC_BLOB_PREFIX = "jct_doc_blob_";
+const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4 MB per file
+const MAX_TOTAL_DOC_SIZE = 20 * 1024 * 1024; // 20 MB total (browser-limited)
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const base64 = String(dataUrl).split(",")[1] || "";
+      resolve(base64);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function totalDocBytes() {
+  let total = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(DOC_BLOB_PREFIX)) {
+      const v = localStorage.getItem(k) || "";
+      total += v.length;
+    }
+  }
+  return total;
+}
+
+async function saveDocumentBlob(docId, base64) {
+  try {
+    localStorage.setItem(DOC_BLOB_PREFIX + docId, base64);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function loadDocumentBlob(docId) {
+  return localStorage.getItem(DOC_BLOB_PREFIX + docId);
+}
+
+function removeDocumentBlob(docId) {
+  localStorage.removeItem(DOC_BLOB_PREFIX + docId);
+}
+
+function downloadDocument(doc) {
+  const base64 = loadDocumentBlob(doc.id);
+  if (!base64) {
+    alert("Document data not found. It may have been deleted from this device.");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = `data:${doc.type || "application/octet-stream"};base64,${base64}`;
+  link.download = doc.name;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function openDocument(doc) {
+  const base64 = loadDocumentBlob(doc.id);
+  if (!base64) {
+    alert("Document data not found. It may have been deleted from this device.");
+    return;
+  }
+  const win = window.open();
+  if (!win) {
+    alert("Pop-up blocked. Allow pop-ups or use Download.");
+    return;
+  }
+  if (doc.type?.startsWith("image/")) {
+    win.document.write(`<html><head><title>${escapeHTML(doc.name)}</title></head><body style="margin:0;background:#222;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="data:${doc.type};base64,${base64}" style="max-width:100%;max-height:100vh" /></body></html>`);
+  } else if (doc.type === "application/pdf") {
+    win.location.href = `data:application/pdf;base64,${base64}`;
+  } else {
+    win.close();
+    downloadDocument(doc);
+  }
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function documentIcon(type, name) {
+  if (type?.startsWith("image/")) return "🖼";
+  if (type === "application/pdf" || name?.toLowerCase().endsWith(".pdf")) return "📄";
+  if (name?.match(/\.(doc|docx)$/i)) return "📝";
+  if (name?.match(/\.(xls|xlsx|csv)$/i)) return "📊";
+  return "📎";
+}
+
+function DocumentsSection({ txn, onUpdate }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const docs = txn.documents || [];
+  const fileInputRef = useRef(null);
+  const [dragActive, setDragActive] = useState(false);
+
+  const handleFiles = async (files) => {
+    setError("");
+    if (!files || files.length === 0) return;
+
+    const totalNow = totalDocBytes();
+    const newDocs = [];
+    setUploading(true);
+
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE) {
+        setError(`"${file.name}" is too large (${formatFileSize(file.size)}). Max per file is ${formatFileSize(MAX_FILE_SIZE)}.`);
+        continue;
+      }
+      const projectedSize = totalNow + (file.size * 1.4);
+      if (projectedSize > MAX_TOTAL_DOC_SIZE) {
+        setError(`Not enough space. Total documents would exceed ${formatFileSize(MAX_TOTAL_DOC_SIZE)}. Remove some files first or wait for cloud storage (Phase 2B).`);
+        continue;
+      }
+
+      try {
+        const base64 = await fileToBase64(file);
+        const docId = newId();
+        const saved = await saveDocumentBlob(docId, base64);
+        if (!saved) {
+          setError(`Browser storage full. Couldn't save "${file.name}". Try removing other documents first.`);
+          continue;
+        }
+        newDocs.push({
+          id: docId,
+          name: file.name,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+          addedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        setError(`Failed to upload "${file.name}": ${e.message}`);
+      }
+    }
+
+    if (newDocs.length > 0) {
+      onUpdate({ ...txn, documents: [...docs, ...newDocs] });
+    }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeDoc = (doc) => {
+    if (!confirm(`Remove "${doc.name}"? This deletes the file from this device — it can't be undone.`)) return;
+    removeDocumentBlob(doc.id);
+    onUpdate({ ...txn, documents: docs.filter(d => d.id !== doc.id) });
+  };
+
+  const renameDoc = (doc) => {
+    const newName = prompt("Rename document:", doc.name);
+    if (!newName || newName === doc.name) return;
+    onUpdate({ ...txn, documents: docs.map(d => d.id === doc.id ? { ...d, name: newName } : d) });
+  };
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div style={styles.formSectionTitle}>
+        <FileText size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Documents {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400, marginLeft: 6 }}>({docs.length})</span>}
+      </div>
+      <div
+        style={{
+          padding: 14,
+          background: "var(--paper-soft)",
+          border: dragActive ? "1px dashed var(--accent)" : "1px solid var(--ink-line)",
+          borderRadius: 12,
+          transition: "border 0.15s",
+        }}
+        onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+        onDragLeave={() => setDragActive(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragActive(false);
+          handleFiles(e.dataTransfer.files);
+        }}
+      >
+        {docs.length === 0 && !uploading && (
+          <div style={{ textAlign: "center", padding: "16px 0", color: "var(--ink-soft)", fontSize: 13 }}>
+            No documents yet. Drag files here or click below to upload.
+          </div>
+        )}
+
+        {docs.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+            {docs.map(doc => (
+              <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
+                <div style={{ fontSize: 20 }}>{documentIcon(doc.type, doc.name)}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</div>
+                  <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+                    {formatFileSize(doc.size)} · {fmtDate(doc.addedAt?.split("T")[0])}
+                  </div>
+                </div>
+                <button onClick={() => openDocument(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Open in new tab">
+                  Open
+                </button>
+                <button onClick={() => downloadDocument(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Download">
+                  <Download size={11} />
+                </button>
+                <button onClick={() => renameDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Rename">
+                  <Edit3 size={12} />
+                </button>
+                <button onClick={() => removeDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Remove">
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt"
+          onChange={(e) => handleFiles(e.target.files)}
+          style={{ display: "none" }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 14px", fontSize: 13, width: "100%", justifyContent: "center", opacity: uploading ? 0.6 : 1 }}
+        >
+          {uploading ? <><Loader2 size={13} className="spin" /> Uploading…</> : <><Upload size={13} /> Upload files</>}
+        </button>
+
+        {error && (
+          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(196, 96, 47, 0.1)", border: "1px solid var(--accent-soft)", borderRadius: 6, color: "var(--accent)", fontSize: 12 }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-soft)", display: "flex", justifyContent: "space-between" }}>
+          <span>PDF, images, Office docs · Max {formatFileSize(MAX_FILE_SIZE)} per file</span>
+          <span style={{ fontWeight: 500 }}>
+            {formatFileSize(totalDocBytes())} of {formatFileSize(MAX_TOTAL_DOC_SIZE)} used
+          </span>
+        </div>
+        <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)" }}>
+          📍 Stored on this device only. Will sync to cloud when Phase 2B (cloud document storage) is set up.
         </div>
       </div>
     </div>
@@ -4835,6 +6463,47 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate }) {
           {/* Client portal access */}
           <ClientPortalSection txn={txn} onUpdate={onUpdate} />
 
+          {/* Documents — file uploads attached to this transaction */}
+          <DocumentsSection txn={txn} onUpdate={onUpdate} />
+
+          {/* Draft Emails — quick mailto: drafts for common recipients */}
+          <div style={{ marginTop: 28 }}>
+            <div style={styles.formSectionTitle}>
+              <Mail size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Draft Emails
+            </div>
+            <div style={{ padding: 14, background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 12, lineHeight: 1.5 }}>
+                Each button opens your default mail app with a pre-filled email — review, edit if needed, then send from your own email.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+                <DraftEmailButton
+                  label={txn.type === "listing" ? "Buyer's Agent" : "Listing Agent"}
+                  hint={(txn.type === "listing" ? txn.contacts?.sellingBroker : txn.contacts?.listingBroker)?.email || "no email on file"}
+                  available={!!(txn.type === "listing" ? txn.contacts?.sellingBroker?.email : txn.contacts?.listingBroker?.email)}
+                  onClick={() => draftEmailToOtherAgent(txn)}
+                />
+                <DraftEmailButton
+                  label="Escrow"
+                  hint={txn.contacts?.escrow?.email || "no email on file"}
+                  available={!!txn.contacts?.escrow?.email}
+                  onClick={() => draftEmailToEscrow(txn)}
+                />
+                <DraftEmailButton
+                  label="Lender"
+                  hint={txn.contacts?.lender?.email || "no email on file"}
+                  available={!!txn.contacts?.lender?.email}
+                  onClick={() => draftEmailToLender(txn)}
+                />
+                <DraftEmailButton
+                  label={txn.type === "listing" ? "Your Seller" : "Your Buyer"}
+                  hint={(txn.type === "listing" ? txn.sellerEmail : txn.buyerEmail) || "no email on file"}
+                  available={!!(txn.type === "listing" ? txn.sellerEmail : txn.buyerEmail)}
+                  onClick={() => draftEmailToClient(txn)}
+                />
+              </div>
+            </div>
+          </div>
+
           {/* Included items */}
           {txn.includedItems && (
             <div style={{ marginTop: 28 }}>
@@ -5334,7 +7003,8 @@ const styles = {
 
   linkGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", gap: 12 },
   linkTile: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: "16px 8px", background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12, textDecoration: "none", transition: "all 0.15s", minHeight: 88, overflow: "hidden" },
-  linkRemoveBtn: { position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "var(--ink)", color: "var(--paper)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 1 },
+  linkRemoveBtn: { position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "var(--ink)", color: "var(--paper)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 2, pointerEvents: "auto" },
+  linkIconToggleBtn: { position: "absolute", top: -6, left: -6, width: 22, height: 22, borderRadius: "50%", background: "var(--paper)", color: "var(--ink)", border: "1px solid var(--ink-line)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 2, pointerEvents: "auto", fontSize: 12, padding: 0 },
   linkAddRow: { display: "flex", gap: 8, marginTop: 14, padding: "12px", background: "var(--paper-soft)", border: "1px dashed var(--ink-line)", borderRadius: 10, flexWrap: "wrap" },
 
   next7Box: { background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12, overflow: "hidden" },

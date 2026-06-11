@@ -1,4 +1,4 @@
-# The Pipeline — Real Estate Transaction Manager
+# The Pipeline — Real Estate Transaction Manager 
 
 A self-contained transaction tracker with AI contract parsing, business-day deadline
 math, and calendar export.

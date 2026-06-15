@@ -312,38 +312,78 @@ Return ONLY a valid JSON object — no markdown, no code fences, no preamble. Us
 Be conservative: only fill a field with clear information from the contract.`;
 
 async function parsePDF(file, prompt) {
-  const base64 = await new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const result = r.result;
-      const idx = result.indexOf(",");
-      resolve(idx >= 0 ? result.slice(idx + 1) : result);
-    };
-    r.onerror = () => reject(new Error("Could not read file"));
-    r.readAsDataURL(file);
-  });
+  // For small PDFs (< 3 MB), send as base64 in the request body — fast, no extra round trip.
+  // For larger PDFs, upload to Supabase Storage first and pass a signed URL,
+  // which bypasses Vercel's 4.5 MB request body limit.
+  const SMALL_FILE_LIMIT = 3 * 1024 * 1024;
 
-  // Calls our own serverless function at /api/parse-contract — the API key
-  // lives on the server, never in the browser.
-  const response = await fetch("/api/parse-contract", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pdfBase64: base64, prompt }),
-  });
+  let body;
+  let tempPath = null;
 
-  if (!response.ok) {
-    let msg = `Parsing service unavailable (${response.status})`;
-    try { const j = await response.json(); if (j.error) msg = j.error; } catch (e) {}
-    throw new Error(msg);
+  if (file.size <= SMALL_FILE_LIMIT) {
+    // ── Small file path: base64 in body
+    const base64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const result = r.result;
+        const idx = result.indexOf(",");
+        resolve(idx >= 0 ? result.slice(idx + 1) : result);
+      };
+      r.onerror = () => reject(new Error("Could not read file"));
+      r.readAsDataURL(file);
+    });
+    body = JSON.stringify({ pdfBase64: base64, prompt });
+  } else {
+    // ── Large file path: upload to Storage, send signed URL
+    const user = await getCurrentUser();
+    if (!user) {
+      throw new Error("This PDF is too large (over 3 MB). Sign in to use cloud parsing for large files.");
+    }
+    tempPath = `${user.id}/_parse_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.pdf`;
+    const { error: uploadErr } = await supabase.storage
+      .from("documents")
+      .upload(tempPath, file, { contentType: "application/pdf", upsert: true });
+    if (uploadErr) throw new Error("Couldn't upload PDF for parsing: " + uploadErr.message);
+
+    const { data: urlData, error: urlErr } = await supabase.storage
+      .from("documents")
+      .createSignedUrl(tempPath, 3600);
+    if (urlErr) {
+      try { await supabase.storage.from("documents").remove([tempPath]); } catch (e) {}
+      throw new Error("Couldn't create signed URL: " + urlErr.message);
+    }
+    body = JSON.stringify({ pdfUrl: urlData.signedUrl, prompt });
   }
 
-  const data = await response.json();
-  const text = (data.content || []).map(b => b.text || "").join("").trim();
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end < 0) throw new Error("Couldn't read document — fill in manually.");
-  try { return JSON.parse(text.slice(start, end + 1)); }
-  catch (e) { throw new Error("Document response wasn't valid JSON — fill in manually."); }
+  try {
+    // Calls our own serverless function at /api/parse-contract — the API key
+    // lives on the server, never in the browser.
+    const response = await fetch("/api/parse-contract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+
+    if (!response.ok) {
+      let msg = `Parsing service unavailable (${response.status})`;
+      try { const j = await response.json(); if (j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    const text = (data.content || []).map(b => b.text || "").join("").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end < 0) throw new Error("Couldn't read document — fill in manually.");
+    try { return JSON.parse(text.slice(start, end + 1)); }
+    catch (e) { throw new Error("Document response wasn't valid JSON — fill in manually."); }
+  } finally {
+    // Always clean up the temp upload, success or failure
+    if (tempPath) {
+      try { await supabase.storage.from("documents").remove([tempPath]); }
+      catch (e) { /* ignore cleanup failures */ }
+    }
+  }
 }
 
 const parseListingAgreement = (file) => parsePDF(file, LISTING_AGREEMENT_PROMPT);

@@ -987,6 +987,12 @@ function MainApp({ user }) {
   const [futureListings, setFutureListings] = useState([]);
   const [futureBuyers, setFutureBuyers] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [todoLists, setTodoLists] = useState([]);
+  // appSettings holds user-level config (notes, calendar events, links,
+  // habits, layout, templates) — stored as one JSON blob in user_settings
+  // and consulted only in cloud mode. In local mode each widget falls back
+  // to its localStorage key.
+  const [appSettings, setAppSettings] = useState({});
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("home");
   const [editing, setEditing] = useState(null);
@@ -1022,18 +1028,21 @@ function MainApp({ user }) {
       try {
         if (isCloud) {
           // ── Cloud mode: load everything from Supabase in parallel
-          const [txns, fl, fb, vds] = await Promise.all([
+          const [txns, fl, fb, vds, tl, st] = await Promise.all([
             loadAll("transactions"),
             loadAll("future_listings"),
             loadAll("future_buyers"),
             loadAll("vendors"),
+            loadAll("todo_lists"),
+            loadSettings(),
           ]);
-          // Ensure transactions have full schema
           const ensured = txns.map(t => ensureTxnSchema(t));
           setTransactions(ensured);
           setFutureListings(fl);
           setFutureBuyers(fb);
           setVendors(vds);
+          setTodoLists(tl);
+          setAppSettings(st || {});
         } else {
           // ── Local mode: original localStorage path
           let raw = null;
@@ -1075,6 +1084,12 @@ function MainApp({ user }) {
       subscribeToTable("future_listings", () => reloadTable("future_listings", setFutureListings, false)),
       subscribeToTable("future_buyers", () => reloadTable("future_buyers", setFutureBuyers, false)),
       subscribeToTable("vendors", () => reloadTable("vendors", setVendors, false)),
+      subscribeToTable("todo_lists", () => reloadTable("todo_lists", setTodoLists, false)),
+      // user_settings is a single-row table per user — just reload on any change
+      subscribeToTable("user_settings", async () => {
+        try { const fresh = await loadSettings(); setAppSettings(fresh || {}); }
+        catch (e) { console.error("Reload settings failed:", e); }
+      }),
     ];
     return () => handlers.forEach(unsub => unsub && unsub());
   }, [isCloud]);
@@ -1087,6 +1102,33 @@ function MainApp({ user }) {
       catch (e) { console.error("Save failed:", e); }
     }
   };
+
+  // Update a single setting key in cloud mode. Optimistically updates local
+  // state, then writes the full merged settings blob to Supabase. In local
+  // mode this is a no-op — widgets manage their own localStorage.
+  const updateSetting = async (key, value) => {
+    const next = { ...appSettings, [key]: value };
+    setAppSettings(next);
+    if (isCloud) {
+      try { await saveSettings(next); }
+      catch (e) { console.error(`Save setting ${key} failed:`, e); }
+    }
+  };
+
+  // Mirror cloud settings to localStorage so synchronous loaders elsewhere
+  // (loadPrelistTemplates, loadClosingTemplate, etc.) still work without
+  // having to be refactored to async.
+  useEffect(() => {
+    if (!isCloud || !appSettings) return;
+    try {
+      if (appSettings.prelist_templates) {
+        localStorage.setItem(PRELIST_TEMPLATES_KEY, JSON.stringify(appSettings.prelist_templates));
+      }
+      if (appSettings.closing_template) {
+        localStorage.setItem(CLOSING_TEMPLATE_KEY, JSON.stringify(appSettings.closing_template));
+      }
+    } catch (e) {}
+  }, [isCloud, appSettings]);
 
   const handleSave = async (txn) => {
     // Auto-apply closing template when status changes to closed and checklist is empty
@@ -1274,6 +1316,10 @@ function MainApp({ user }) {
             stats={stats}
             futureListings={futureListings}
             futureBuyers={futureBuyers}
+            todoLists={todoLists}
+            onTodoListsCloudSave={async (list) => { await upsert("todo_lists", list); }}
+            appSettings={appSettings}
+            updateSetting={updateSetting}
             isCloud={isCloud}
             onOpen={setDetail}
             onNewListing={() => setEditing(newTransaction("listing"))}
@@ -1282,7 +1328,12 @@ function MainApp({ user }) {
             onGoToView={setView}
           />
         ) : view === "todos" ? (
-          <TodosTab />
+          <TodosTab
+            isCloud={isCloud}
+            cloudItems={todoLists}
+            onCloudSave={async (list) => { await upsert("todo_lists", list); }}
+            onCloudRemove={async (id) => { await remove("todo_lists", id); }}
+          />
         ) : view === "dashboard" ? (
           <Dashboard stats={stats} transactions={transactions} onOpen={setDetail} />
         ) : view === "futureListings" ? (
@@ -1362,7 +1413,7 @@ function MainApp({ user }) {
       {editing && <FormModal txn={editing} onClose={() => setEditing(null)} onSave={handleSave} />}
       {detail && !editing && (
         <DetailModal txn={detail} onClose={() => setDetail(null)}
-          onEdit={() => setEditing(detail)} onDelete={() => handleDelete(detail.id)} onUpdate={handleSave} />
+          onEdit={() => setEditing(detail)} onDelete={() => handleDelete(detail.id)} onUpdate={handleSave} isCloud={isCloud} />
       )}
 
       {/* Quick Add floating button — always visible */}
@@ -1392,6 +1443,8 @@ function MainApp({ user }) {
         <TemplateEditorModal
           kind={showTemplateEditor}
           onClose={() => setShowTemplateEditor(null)}
+          isCloud={isCloud}
+          updateSetting={updateSetting}
         />
       )}
 
@@ -1484,36 +1537,52 @@ const HOME_LABEL = "Kalama, WA";
 // Edit mode lets you add/remove/reorder widgets across two columns.
 // All widget data and layout auto-saves per device.
 // ════════════════════════════════════════════════════════════════════════════
-function HomeBase({ transactions, stats, futureListings, futureBuyers, isCloud, onOpen, onNewListing, onNewBuyer, onGoToPipeline, onGoToView }) {
+function HomeBase({ transactions, stats, futureListings, futureBuyers, todoLists, onTodoListsCloudSave, appSettings, updateSetting, isCloud, onOpen, onNewListing, onNewBuyer, onGoToPipeline, onGoToView }) {
   const [layout, setLayout] = useState(DEFAULT_LAYOUT);
   const [editMode, setEditMode] = useState(false);
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [weather, setWeather] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
 
-  // Load layout once. Migrate old to-do widgets to the new system:
-  // remove todosToday/todosGeneral/customList from saved layouts and add
-  // todoReminders if it's not already there.
+  // Load layout. Cloud → from appSettings; local → from localStorage.
+  // Either way migrate deprecated to-do widgets and ensure todoReminders exists.
   useEffect(() => {
+    const migrate = (parsed) => {
+      const deprecatedTypes = new Set(["todosToday", "todosGeneral", "customList"]);
+      const cleaned = parsed.filter(w => !deprecatedTypes.has(w.type));
+      const hasTodoReminders = cleaned.some(w => w.type === "todoReminders");
+      if (!hasTodoReminders) {
+        cleaned.unshift({ id: "w_todo_reminders", type: "todoReminders", col: "left" });
+      }
+      return cleaned;
+    };
+
+    if (isCloud) {
+      const cloudLayout = appSettings?.home_layout;
+      if (cloudLayout && Array.isArray(cloudLayout) && cloudLayout.length > 0) {
+        setLayout(migrate(cloudLayout));
+      }
+      return;
+    }
+
     try {
       const saved = localStorage.getItem(LAYOUT_STORAGE_KEY);
-      if (saved) {
-        let parsed = JSON.parse(saved);
-        const deprecatedTypes = new Set(["todosToday", "todosGeneral", "customList"]);
-        const cleaned = parsed.filter(w => !deprecatedTypes.has(w.type));
-        const hasTodoReminders = cleaned.some(w => w.type === "todoReminders");
-        if (!hasTodoReminders) {
-          cleaned.unshift({ id: "w_todo_reminders", type: "todoReminders", col: "left" });
-        }
-        setLayout(cleaned);
-      }
+      if (saved) setLayout(migrate(JSON.parse(saved)));
     } catch (e) {}
-  }, []);
+  }, [isCloud, appSettings?.home_layout]);
 
-  // Auto-save layout
+  // Save layout: cloud → user_settings, local → localStorage
   useEffect(() => {
-    try { localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout)); } catch (e) {}
-  }, [layout]);
+    if (isCloud) {
+      // Skip the very first auto-save (when layout is still DEFAULT_LAYOUT)
+      // so we don't overwrite a synced layout that's still being loaded.
+      if (layout !== DEFAULT_LAYOUT && updateSetting) {
+        updateSetting("home_layout", layout);
+      }
+    } else {
+      try { localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout)); } catch (e) {}
+    }
+  }, [layout, isCloud]);
 
   // Weather
   useEffect(() => {
@@ -1581,6 +1650,10 @@ function HomeBase({ transactions, stats, futureListings, futureBuyers, isCloud, 
     transactions, stats, onOpen, urgent, weather, editMode,
     futureListings: futureListings || [],
     futureBuyers: futureBuyers || [],
+    todoLists: todoLists || [],
+    onTodoListsCloudSave,
+    appSettings: appSettings || {},
+    updateSetting,
     isCloud,
     onGoToView,
   };
@@ -1775,16 +1848,16 @@ function ColumnDropZone({ col, editMode, draggedId, onDropOnEmptyCol, empty, chi
 function renderWidget(widget, props) {
   const { transactions, stats, onOpen, urgent, weather, futureListings, futureBuyers, isCloud, onGoToView } = props;
   switch (widget.type) {
-    case "todoReminders":return <TodoRemindersWidget onGoToView={onGoToView} />;
-    case "notes":        return <NotesWidget />;
-    case "next7":        return <Next7Widget transactions={transactions} onOpen={onOpen} />;
+    case "todoReminders":return <TodoRemindersWidget onGoToView={onGoToView} isCloud={props.isCloud} cloudItems={props.todoLists} onCloudSave={props.onTodoListsCloudSave} />;
+    case "notes":        return <NotesWidget isCloud={props.isCloud} appSettings={props.appSettings} updateSetting={props.updateSetting} />;
+    case "next7":        return <Next7Widget transactions={transactions} onOpen={onOpen} isCloud={props.isCloud} appSettings={props.appSettings} />;
     case "checkIns":     return <CheckInsWidget futureListings={futureListings} futureBuyers={futureBuyers} isCloud={isCloud} onGoToView={onGoToView} />;
-    case "calendar":     return <CalendarWidget transactions={transactions} onOpen={onOpen} />;
-    case "quickLaunch":  return <QuickLaunchWidget homeEditMode={props.editMode} />;
+    case "calendar":     return <CalendarWidget transactions={transactions} onOpen={onOpen} isCloud={props.isCloud} appSettings={props.appSettings} updateSetting={props.updateSetting} />;
+    case "quickLaunch":  return <QuickLaunchWidget homeEditMode={props.editMode} isCloud={props.isCloud} appSettings={props.appSettings} updateSetting={props.updateSetting} />;
     case "recent":       return <RecentWidget transactions={transactions} onOpen={onOpen} />;
     case "calculator":   return <CalculatorWidget />;
     case "contactLookup":return <ContactLookupWidget transactions={transactions} onOpen={onOpen} />;
-    case "habits":       return <HabitsWidget />;
+    case "habits":       return <HabitsWidget isCloud={props.isCloud} appSettings={props.appSettings} updateSetting={props.updateSetting} />;
     // Legacy widget types — kept so existing saved layouts don't crash on load.
     // They render nothing; user is expected to remove them in Customize mode.
     case "todosToday":   return null;
@@ -1894,21 +1967,55 @@ function CustomListWidget({ widgetId }) {
 }
 
 // ─── Notes Widget ────────────────────────────────────────────────────────────
-function NotesWidget() {
-  const [notes, setNotes] = useState("");
+function NotesWidget({ isCloud, appSettings, updateSetting }) {
+  // We use localValue as the immediately-displayed text so typing is responsive,
+  // and debounce writes to the cloud. In local mode, localValue IS the source.
+  const [localValue, setLocalValue] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const debounceRef = useRef(null);
+
+  // Initial load
   useEffect(() => {
-    try { const v = localStorage.getItem(NOTES_STORAGE_KEY); if (v) setNotes(v); } catch (e) {}
+    if (isCloud) {
+      setLocalValue(appSettings?.quick_notes || "");
+      setLoaded(true);
+      return;
+    }
+    try { const v = localStorage.getItem(NOTES_STORAGE_KEY); if (v) setLocalValue(v); } catch (e) {}
     setLoaded(true);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCloud]);
+
+  // Track external changes from cloud realtime (only in cloud mode)
   useEffect(() => {
+    if (!isCloud) return;
+    const cloudVal = appSettings?.quick_notes || "";
+    // Only adopt the cloud value if we're not in the middle of editing
+    if (debounceRef.current === null && cloudVal !== localValue) {
+      setLocalValue(cloudVal);
+    }
+  }, [isCloud, appSettings?.quick_notes]);
+
+  // Save: cloud (debounced) or localStorage (immediate)
+  const handleChange = (e) => {
+    const v = e.target.value;
+    setLocalValue(v);
     if (!loaded) return;
-    try { localStorage.setItem(NOTES_STORAGE_KEY, notes); } catch (e) {}
-  }, [notes, loaded]);
+    if (isCloud) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        updateSetting && updateSetting("quick_notes", v);
+        debounceRef.current = null;
+      }, 800);
+    } else {
+      try { localStorage.setItem(NOTES_STORAGE_KEY, v); } catch (e2) {}
+    }
+  };
+
   return (
     <div>
       <h2 style={styles.sectionTitle}>Quick Notes</h2>
-      <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+      <textarea value={localValue} onChange={handleChange}
         placeholder="Scratchpad — call notes, lead reminders, anything. Auto-saves."
         style={styles.notesPad} />
     </div>
@@ -1916,21 +2023,23 @@ function NotesWidget() {
 }
 
 // ─── Next 7 Days Widget ──────────────────────────────────────────────────────
-function Next7Widget({ transactions, onOpen }) {
-  // Live-tracked personal calendar events from localStorage. We poll periodically
-  // so that adding events in the Calendar widget reflects here without a full reload.
-  const [calendarEvents, setCalendarEvents] = useState([]);
+function Next7Widget({ transactions, onOpen, isCloud, appSettings }) {
+  // Calendar events: cloud → appSettings.calendar_events; local → poll localStorage
+  const [localCalendarEvents, setLocalCalendarEvents] = useState([]);
+  const calendarEvents = isCloud ? (appSettings?.calendar_events || []) : localCalendarEvents;
+
   useEffect(() => {
+    if (isCloud) return;
     const reload = () => {
       try {
         const stored = localStorage.getItem(CALENDAR_EVENTS_KEY);
-        setCalendarEvents(stored ? JSON.parse(stored) : []);
-      } catch (e) { setCalendarEvents([]); }
+        setLocalCalendarEvents(stored ? JSON.parse(stored) : []);
+      } catch (e) { setLocalCalendarEvents([]); }
     };
     reload();
     const id = setInterval(reload, 3000);
     return () => clearInterval(id);
-  }, []);
+  }, [isCloud]);
 
   const next7 = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -2001,21 +2110,31 @@ function Next7Widget({ transactions, onOpen }) {
 }
 
 // ─── Calendar Widget ─────────────────────────────────────────────────────────
-function CalendarWidget({ transactions, onOpen }) {
+function CalendarWidget({ transactions, onOpen, isCloud, appSettings, updateSetting }) {
   const [viewDate, setViewDate] = useState(new Date());
   const [selectedISO, setSelectedISO] = useState(formatLocalDate(new Date()));
-  const [events, setEvents] = useState([]);
+  const [localEvents, setLocalEvents] = useState([]);
   const [newEventText, setNewEventText] = useState("");
   const [loaded, setLoaded] = useState(false);
 
+  // Cloud uses settings; local uses localStorage
+  const events = isCloud ? (appSettings?.calendar_events || []) : localEvents;
+
   useEffect(() => {
-    try { const v = localStorage.getItem(CALENDAR_EVENTS_KEY); if (v) setEvents(JSON.parse(v)); } catch (e) {}
+    if (isCloud) { setLoaded(true); return; }
+    try { const v = localStorage.getItem(CALENDAR_EVENTS_KEY); if (v) setLocalEvents(JSON.parse(v)); } catch (e) {}
     setLoaded(true);
-  }, []);
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(CALENDAR_EVENTS_KEY, JSON.stringify(events)); } catch (e) {}
-  }, [events, loaded]);
+  }, [isCloud]);
+
+  // Universal save — cloud or local
+  const saveEvents = async (next) => {
+    if (isCloud) {
+      updateSetting && updateSetting("calendar_events", next);
+    } else {
+      setLocalEvents(next);
+      try { localStorage.setItem(CALENDAR_EVENTS_KEY, JSON.stringify(next)); } catch (e) {}
+    }
+  };
 
   // Build month grid
   const year = viewDate.getFullYear();
@@ -2060,10 +2179,10 @@ function CalendarWidget({ transactions, onOpen }) {
 
   const addEvent = () => {
     if (!newEventText.trim()) return;
-    setEvents([...events, { id: newId(), date: selectedISO, text: newEventText.trim(), created: Date.now() }]);
+    saveEvents([...events, { id: newId(), date: selectedISO, text: newEventText.trim(), created: Date.now() }]);
     setNewEventText("");
   };
-  const removeEvent = (id) => setEvents(events.filter(e => e.id !== id));
+  const removeEvent = (id) => saveEvents(events.filter(e => e.id !== id));
 
   return (
     <div>
@@ -2159,18 +2278,29 @@ function CalendarWidget({ transactions, onOpen }) {
 // We enable tile editing in both situations so the user doesn't have to learn
 // the difference. (Note: the parent wraps widget content in pointer-events:none
 // when homeEditMode is on, so this widget overrides that for its tile controls.)
-function QuickLaunchWidget({ homeEditMode }) {
-  const [links, setLinks] = useState(DEFAULT_LINKS);
+function QuickLaunchWidget({ homeEditMode, isCloud, appSettings, updateSetting }) {
+  const [localLinks, setLocalLinks] = useState(DEFAULT_LINKS);
   const [editingLinks, setEditingLinks] = useState(false);
   const [loaded, setLoaded] = useState(false);
+
+  // Cloud → appSettings.home_links; local → localStorage
+  const links = isCloud ? (appSettings?.home_links || DEFAULT_LINKS) : localLinks;
+
   useEffect(() => {
-    try { const v = localStorage.getItem(LINKS_STORAGE_KEY); if (v) setLinks(JSON.parse(v)); } catch (e) {}
+    if (isCloud) { setLoaded(true); return; }
+    try { const v = localStorage.getItem(LINKS_STORAGE_KEY); if (v) setLocalLinks(JSON.parse(v)); } catch (e) {}
     setLoaded(true);
-  }, []);
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(LINKS_STORAGE_KEY, JSON.stringify(links)); } catch (e) {}
-  }, [links, loaded]);
+  }, [isCloud]);
+
+  // Universal save
+  const saveLinks = (next) => {
+    if (isCloud) {
+      updateSetting && updateSetting("home_links", next);
+    } else {
+      setLocalLinks(next);
+      try { localStorage.setItem(LINKS_STORAGE_KEY, JSON.stringify(next)); } catch (e) {}
+    }
+  };
 
   const editing = editingLinks || homeEditMode;
 
@@ -2185,7 +2315,7 @@ function QuickLaunchWidget({ homeEditMode }) {
           </button>
         )}
       </div>
-      <QuickLaunch links={links} onChange={setLinks} editing={editing} />
+      <QuickLaunch links={links} onChange={saveLinks} editing={editing} />
     </div>
   );
 }
@@ -2436,28 +2566,36 @@ function CheckInsWidget({ futureListings, futureBuyers, isCloud, onGoToView }) {
   );
 }
 
-function HabitsWidget() {
-  const [habits, setHabits] = useState([]);
+function HabitsWidget({ isCloud, appSettings, updateSetting }) {
+  const [localHabits, setLocalHabits] = useState([]);
   const [newHabitText, setNewHabitText] = useState("");
   const [loaded, setLoaded] = useState(false);
   const todayISO = formatLocalDate(new Date());
 
+  const habits = isCloud ? (appSettings?.habits || []) : localHabits;
+
   useEffect(() => {
-    try { const v = localStorage.getItem(HABITS_KEY); if (v) setHabits(JSON.parse(v)); } catch (e) {}
+    if (isCloud) { setLoaded(true); return; }
+    try { const v = localStorage.getItem(HABITS_KEY); if (v) setLocalHabits(JSON.parse(v)); } catch (e) {}
     setLoaded(true);
-  }, []);
-  useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(HABITS_KEY, JSON.stringify(habits)); } catch (e) {}
-  }, [habits, loaded]);
+  }, [isCloud]);
+
+  const saveHabits = (next) => {
+    if (isCloud) {
+      updateSetting && updateSetting("habits", next);
+    } else {
+      setLocalHabits(next);
+      try { localStorage.setItem(HABITS_KEY, JSON.stringify(next)); } catch (e) {}
+    }
+  };
 
   const addHabit = () => {
     if (!newHabitText.trim()) return;
-    setHabits([...habits, { id: newId(), name: newHabitText.trim(), completedDates: [] }]);
+    saveHabits([...habits, { id: newId(), name: newHabitText.trim(), completedDates: [] }]);
     setNewHabitText("");
   };
-  const removeHabit = (id) => setHabits(habits.filter(h => h.id !== id));
-  const toggleToday = (id) => setHabits(habits.map(h => {
+  const removeHabit = (id) => saveHabits(habits.filter(h => h.id !== id));
+  const toggleToday = (id) => saveHabits(habits.map(h => {
     if (h.id !== id) return h;
     const done = h.completedDates.includes(todayISO);
     return { ...h, completedDates: done ? h.completedDates.filter(d => d !== todayISO) : [...h.completedDates, todayISO] };
@@ -4186,46 +4324,80 @@ function collectDueReminders(lists, windowDays = 7) {
   return all.sort((a, b) => (a.status.days ?? 9999) - (b.status.days ?? 9999));
 }
 
-function TodosTab() {
-  const [lists, setLists] = useState([]);
+function TodosTab({ isCloud, cloudItems, onCloudSave, onCloudRemove }) {
+  const [localLists, setLocalLists] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [newListName, setNewListName] = useState("");
 
+  // In cloud mode, the source of truth is the cloudItems prop (kept in sync
+  // by the parent via realtime subscription). In local mode, we manage our
+  // own state and persist to localStorage.
+  const lists = isCloud ? (cloudItems || []) : localLists;
+
   useEffect(() => {
+    if (isCloud) { setLoaded(true); return; }
     try {
       const stored = localStorage.getItem(TODO_LISTS_KEY);
-      if (stored) setLists(JSON.parse(stored));
+      if (stored) setLocalLists(JSON.parse(stored));
     } catch (e) {}
     setLoaded(true);
-  }, []);
+  }, [isCloud]);
 
+  // Auto-save local mode changes
   useEffect(() => {
-    if (!loaded) return;
-    try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(lists)); }
-    catch (e) {}
-  }, [lists, loaded]);
+    if (isCloud || !loaded) return;
+    try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(localLists)); } catch (e) {}
+  }, [localLists, isCloud, loaded]);
 
-  const addList = () => {
+  // Universal save handler — picks the right path based on mode
+  const saveList = async (updated) => {
+    if (isCloud) {
+      try { await onCloudSave(updated); }
+      catch (e) { console.error("Cloud save failed:", e); alert("Couldn't save to cloud: " + (e.message || "")); }
+    } else {
+      setLocalLists(prev => {
+        const exists = prev.find(l => l.id === updated.id);
+        const next = exists ? prev.map(l => l.id === updated.id ? updated : l) : [...prev, updated];
+        try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+    }
+  };
+
+  const addList = async () => {
     const name = newListName.trim();
     if (!name) return;
-    setLists([...lists, { id: newId(), name, createdAt: new Date().toISOString(), items: [] }]);
+    const newList = { id: newId(), name, createdAt: new Date().toISOString(), items: [] };
+    await saveList(newList);
     setNewListName("");
   };
 
-  const removeList = (id) => {
+  const removeList = async (id) => {
     if (!confirm("Delete this list and all its to-dos?")) return;
-    setLists(lists.filter(l => l.id !== id));
+    if (isCloud) {
+      try { await onCloudRemove(id); }
+      catch (e) { alert("Couldn't delete from cloud: " + (e.message || "")); }
+    } else {
+      setLocalLists(prev => {
+        const next = prev.filter(l => l.id !== id);
+        try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+    }
   };
 
-  const renameList = (id) => {
+  const renameList = async (id) => {
     const list = lists.find(l => l.id === id);
+    if (!list) return;
     const name = prompt("Rename list:", list.name);
     if (!name || name.trim() === list.name) return;
-    setLists(lists.map(l => l.id === id ? { ...l, name: name.trim() } : l));
+    await saveList({ ...list, name: name.trim() });
   };
 
-  const updateList = (id, updates) => {
-    setLists(lists.map(l => l.id === id ? { ...l, ...updates } : l));
+  const updateList = async (id, updates) => {
+    const existing = lists.find(l => l.id === id);
+    if (!existing) return;
+    await saveList({ ...existing, ...updates });
   };
 
   if (!loaded) return null;
@@ -4237,6 +4409,7 @@ function TodosTab() {
           <h1 style={{ ...styles.pageTitle, marginBottom: 4 }}>To-Dos</h1>
           <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>
             {lists.length === 0 ? "No lists yet. Create your first one below." : `${lists.length} list${lists.length === 1 ? "" : "s"}`}
+            {isCloud && <span style={{ marginLeft: 8, color: "var(--accent)" }}> · ☁ Syncs across devices</span>}
           </div>
         </div>
       </div>
@@ -4474,34 +4647,46 @@ function TodoItem({ item, onToggle, onEdit, onRemove, onSetReminder, reminderOpe
 }
 
 // ─── Home widget: To-Do Reminders ────────────────────────────────────────────
-function TodoRemindersWidget({ onGoToView }) {
-  const [lists, setLists] = useState([]);
+function TodoRemindersWidget({ onGoToView, isCloud, cloudItems, onCloudSave }) {
+  const [localLists, setLocalLists] = useState([]);
+
+  // In cloud mode, use the cloudItems prop (kept fresh by realtime sub).
+  // In local mode, poll localStorage so changes from the To-Dos tab show up.
+  const lists = isCloud ? (cloudItems || []) : localLists;
 
   useEffect(() => {
+    if (isCloud) return;
     const reload = () => {
       try {
         const stored = localStorage.getItem(TODO_LISTS_KEY);
-        setLists(stored ? JSON.parse(stored) : []);
-      } catch (e) { setLists([]); }
+        setLocalLists(stored ? JSON.parse(stored) : []);
+      } catch (e) { setLocalLists([]); }
     };
     reload();
     const id = setInterval(reload, 3000);
     return () => clearInterval(id);
-  }, []);
+  }, [isCloud]);
 
   const due = collectDueReminders(lists, 7);
 
   // Acknowledge a recurring reminder — bumps lastReminded so nextReminder rolls forward
-  const acknowledge = (listId, itemId) => {
+  const acknowledge = async (listId, itemId) => {
     const today = formatLocalDate(new Date());
-    const next = lists.map(l => l.id !== listId ? l : {
-      ...l,
-      items: l.items.map(i => i.id !== itemId ? i : (
-        i.reminderType === "frequency" ? { ...i, lastReminded: today } : { ...i, reminderType: "none" }
-      )),
-    });
-    setLists(next);
-    try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(next)); } catch (e) {}
+    const targetList = lists.find(l => l.id === listId);
+    if (!targetList) return;
+    const updatedItems = targetList.items.map(i => i.id !== itemId ? i : (
+      i.reminderType === "frequency" ? { ...i, lastReminded: today } : { ...i, reminderType: "none" }
+    ));
+    const updatedList = { ...targetList, items: updatedItems };
+
+    if (isCloud) {
+      try { await onCloudSave(updatedList); }
+      catch (e) { console.error("Cloud save failed:", e); alert("Couldn't update reminder: " + (e.message || "")); }
+    } else {
+      const next = lists.map(l => l.id === listId ? updatedList : l);
+      setLocalLists(next);
+      try { localStorage.setItem(TODO_LISTS_KEY, JSON.stringify(next)); } catch (e) {}
+    }
   };
 
   return (
@@ -5190,7 +5375,7 @@ function ChecklistSection({ title, icon: Icon, items, onChange, templates, onApp
 // ════════════════════════════════════════════════════════════════════════════
 // TEMPLATE EDITOR — manage prelist and closing templates
 // ════════════════════════════════════════════════════════════════════════════
-function TemplateEditorModal({ kind, onClose }) {
+function TemplateEditorModal({ kind, onClose, isCloud, updateSetting }) {
   const [templates, setTemplates] = useState(
     kind === "prelist" ? loadPrelistTemplates() : [loadClosingTemplate()]
   );
@@ -5201,8 +5386,10 @@ function TemplateEditorModal({ kind, onClose }) {
   const save = () => {
     if (kind === "prelist") {
       try { localStorage.setItem(PRELIST_TEMPLATES_KEY, JSON.stringify(templates)); } catch (e) {}
+      if (isCloud && updateSetting) updateSetting("prelist_templates", templates);
     } else {
       try { localStorage.setItem(CLOSING_TEMPLATE_KEY, JSON.stringify(templates[0])); } catch (e) {}
+      if (isCloud && updateSetting) updateSetting("closing_template", templates[0]);
     }
     onClose();
   };
@@ -5473,9 +5660,14 @@ function DraftEmailButton({ label, hint, available, onClick }) {
 // Files stored as base64 in localStorage under separate keys (small files only).
 // Will auto-migrate to Supabase Storage in Phase 2B.
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// DOCUMENT STORAGE — localStorage for local mode, Supabase Storage for cloud
+// ════════════════════════════════════════════════════════════════════════════
 const DOC_BLOB_PREFIX = "jct_doc_blob_";
-const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4 MB per file
-const MAX_TOTAL_DOC_SIZE = 20 * 1024 * 1024; // 20 MB total (browser-limited)
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per file (cloud) / 4 MB enforced for local
+const MAX_LOCAL_FILE_SIZE = 4 * 1024 * 1024;
+const MAX_TOTAL_DOC_SIZE = 20 * 1024 * 1024; // 20 MB total in local mode
+const STORAGE_BUCKET = "documents";
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -5490,7 +5682,17 @@ function fileToBase64(file) {
   });
 }
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.readAsDataURL(blob);
+  });
+}
+
 function totalDocBytes() {
+  // Only meaningful for local mode (cloud has its own quota)
   let total = 0;
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
@@ -5502,7 +5704,24 @@ function totalDocBytes() {
   return total;
 }
 
-async function saveDocumentBlob(docId, base64) {
+// Save a document. In cloud mode, uploads the File to Supabase Storage at
+// {user_id}/{docId}. In local mode, stores base64 in localStorage.
+async function saveDocumentBlob(docId, file, base64, isCloud) {
+  if (isCloud) {
+    try {
+      const user = await getCurrentUser();
+      if (!user) throw new Error("Not signed in");
+      const path = `${user.id}/${docId}`;
+      const { error } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(path, file, { upsert: true, contentType: file.type || "application/octet-stream" });
+      if (error) throw error;
+      return true;
+    } catch (e) {
+      console.error("Cloud upload failed:", e);
+      return false;
+    }
+  }
   try {
     localStorage.setItem(DOC_BLOB_PREFIX + docId, base64);
     return true;
@@ -5511,18 +5730,46 @@ async function saveDocumentBlob(docId, base64) {
   }
 }
 
-function loadDocumentBlob(docId) {
+// Load a document. Cloud → downloads from Storage and returns base64.
+// Local → reads localStorage. Async in both cases.
+async function loadDocumentBlob(docId, isCloud) {
+  if (isCloud) {
+    try {
+      const user = await getCurrentUser();
+      if (!user) return null;
+      const path = `${user.id}/${docId}`;
+      const { data, error } = await supabase.storage.from(STORAGE_BUCKET).download(path);
+      if (error) {
+        // Fall back to localStorage in case this is an older doc that wasn't migrated
+        const local = localStorage.getItem(DOC_BLOB_PREFIX + docId);
+        return local;
+      }
+      return await blobToBase64(data);
+    } catch (e) {
+      console.error("Cloud download failed:", e);
+      return localStorage.getItem(DOC_BLOB_PREFIX + docId);
+    }
+  }
   return localStorage.getItem(DOC_BLOB_PREFIX + docId);
 }
 
-function removeDocumentBlob(docId) {
-  localStorage.removeItem(DOC_BLOB_PREFIX + docId);
+async function removeDocumentBlob(docId, isCloud) {
+  if (isCloud) {
+    try {
+      const user = await getCurrentUser();
+      if (user) {
+        const path = `${user.id}/${docId}`;
+        await supabase.storage.from(STORAGE_BUCKET).remove([path]);
+      }
+    } catch (e) { /* swallow */ }
+  }
+  try { localStorage.removeItem(DOC_BLOB_PREFIX + docId); } catch (e) {}
 }
 
-function downloadDocument(doc) {
-  const base64 = loadDocumentBlob(doc.id);
+async function downloadDocument(doc, isCloud) {
+  const base64 = await loadDocumentBlob(doc.id, isCloud);
   if (!base64) {
-    alert("Document data not found. It may have been deleted from this device.");
+    alert("Document data not found.");
     return;
   }
   const link = document.createElement("a");
@@ -5533,10 +5780,10 @@ function downloadDocument(doc) {
   document.body.removeChild(link);
 }
 
-function openDocument(doc) {
-  const base64 = loadDocumentBlob(doc.id);
+async function openDocument(doc, isCloud) {
+  const base64 = await loadDocumentBlob(doc.id, isCloud);
   if (!base64) {
-    alert("Document data not found. It may have been deleted from this device.");
+    alert("Document data not found.");
     return;
   }
   const win = window.open();
@@ -5550,7 +5797,7 @@ function openDocument(doc) {
     win.location.href = `data:application/pdf;base64,${base64}`;
   } else {
     win.close();
-    downloadDocument(doc);
+    downloadDocument(doc, isCloud);
   }
 }
 
@@ -5572,7 +5819,7 @@ function documentIcon(type, name) {
   return "📎";
 }
 
-function DocumentsSection({ txn, onUpdate }) {
+function DocumentsSection({ txn, onUpdate, isCloud }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const docs = txn.documents || [];
@@ -5583,27 +5830,31 @@ function DocumentsSection({ txn, onUpdate }) {
     setError("");
     if (!files || files.length === 0) return;
 
-    const totalNow = totalDocBytes();
+    const totalNow = isCloud ? 0 : totalDocBytes();
     const newDocs = [];
     setUploading(true);
 
     for (const file of files) {
-      if (file.size > MAX_FILE_SIZE) {
-        setError(`"${file.name}" is too large (${formatFileSize(file.size)}). Max per file is ${formatFileSize(MAX_FILE_SIZE)}.`);
+      const sizeLimit = isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE;
+      if (file.size > sizeLimit) {
+        setError(`"${file.name}" is too large (${formatFileSize(file.size)}). Max per file is ${formatFileSize(sizeLimit)}.`);
         continue;
       }
-      const projectedSize = totalNow + (file.size * 1.4);
-      if (projectedSize > MAX_TOTAL_DOC_SIZE) {
-        setError(`Not enough space. Total documents would exceed ${formatFileSize(MAX_TOTAL_DOC_SIZE)}. Remove some files first or wait for cloud storage (Phase 2B).`);
-        continue;
+      if (!isCloud) {
+        const projectedSize = totalNow + (file.size * 1.4);
+        if (projectedSize > MAX_TOTAL_DOC_SIZE) {
+          setError(`Not enough browser space. Total documents would exceed ${formatFileSize(MAX_TOTAL_DOC_SIZE)}. Sign in to use cloud storage.`);
+          continue;
+        }
       }
 
       try {
-        const base64 = await fileToBase64(file);
+        // Cloud uses the File directly; local needs base64.
+        const base64 = isCloud ? null : await fileToBase64(file);
         const docId = newId();
-        const saved = await saveDocumentBlob(docId, base64);
+        const saved = await saveDocumentBlob(docId, file, base64, isCloud);
         if (!saved) {
-          setError(`Browser storage full. Couldn't save "${file.name}". Try removing other documents first.`);
+          setError(`Couldn't save "${file.name}".`);
           continue;
         }
         newDocs.push({
@@ -5612,6 +5863,7 @@ function DocumentsSection({ txn, onUpdate }) {
           type: file.type || "application/octet-stream",
           size: file.size,
           addedAt: new Date().toISOString(),
+          cloud: !!isCloud,
         });
       } catch (e) {
         setError(`Failed to upload "${file.name}": ${e.message}`);
@@ -5625,9 +5877,11 @@ function DocumentsSection({ txn, onUpdate }) {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const removeDoc = (doc) => {
-    if (!confirm(`Remove "${doc.name}"? This deletes the file from this device — it can't be undone.`)) return;
-    removeDocumentBlob(doc.id);
+  const removeDoc = async (doc) => {
+    if (!confirm(`Remove "${doc.name}"? This deletes the file — it can't be undone.`)) return;
+    // Use doc.cloud if present, else fall back to current cloud mode (legacy local docs need local cleanup)
+    const docWasCloud = doc.cloud === true || (doc.cloud === undefined && isCloud);
+    await removeDocumentBlob(doc.id, docWasCloud);
     onUpdate({ ...txn, documents: docs.filter(d => d.id !== doc.id) });
   };
 
@@ -5636,6 +5890,10 @@ function DocumentsSection({ txn, onUpdate }) {
     if (!newName || newName === doc.name) return;
     onUpdate({ ...txn, documents: docs.map(d => d.id === doc.id ? { ...d, name: newName } : d) });
   };
+
+  // Wrappers for open/download that pass each doc's cloud flag
+  const openDoc = (doc) => openDocument(doc, doc.cloud === true || (doc.cloud === undefined && isCloud));
+  const downloadDoc = (doc) => downloadDocument(doc, doc.cloud === true || (doc.cloud === undefined && isCloud));
 
   return (
     <div style={{ marginTop: 28 }}>
@@ -5675,10 +5933,10 @@ function DocumentsSection({ txn, onUpdate }) {
                     {formatFileSize(doc.size)} · {fmtDate(doc.addedAt?.split("T")[0])}
                   </div>
                 </div>
-                <button onClick={() => openDocument(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Open in new tab">
+                <button onClick={() => openDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Open in new tab">
                   Open
                 </button>
-                <button onClick={() => downloadDocument(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Download">
+                <button onClick={() => downloadDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Download">
                   <Download size={11} />
                 </button>
                 <button onClick={() => renameDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Rename">
@@ -6305,7 +6563,7 @@ function UploadCard({ title, description, active, disabled, inputRef, onPick }) 
 // ════════════════════════════════════════════════════════════════════════════
 // DETAIL MODAL
 // ════════════════════════════════════════════════════════════════════════════
-function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate }) {
+function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
   const status = STATUS_OPTIONS.find(s => s.value === txn.status) || STATUS_OPTIONS[0];
   const [showShare, setShowShare] = useState(false);
 
@@ -6464,7 +6722,7 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate }) {
           <ClientPortalSection txn={txn} onUpdate={onUpdate} />
 
           {/* Documents — file uploads attached to this transaction */}
-          <DocumentsSection txn={txn} onUpdate={onUpdate} />
+          <DocumentsSection txn={txn} onUpdate={onUpdate} isCloud={isCloud} />
 
           {/* Draft Emails — quick mailto: drafts for common recipients */}
           <div style={{ marginTop: 28 }}>

@@ -1,8 +1,9 @@
 // Vercel Serverless Function: /api/parse-contract
 //
-// Receives a base64 PDF and a prompt from the browser, forwards to Anthropic's
-// API using the ANTHROPIC_API_KEY environment variable (set in Vercel dashboard),
-// and returns the response. Keeps the key server-side so it never reaches the
+// Receives EITHER a base64 PDF (small files) or a signed URL (large files)
+// plus a prompt from the browser, forwards to Anthropic's API using the
+// ANTHROPIC_API_KEY environment variable (set in Vercel dashboard), and
+// returns the response. Keeps the key server-side so it never reaches the
 // user's browser.
 
 export default async function handler(req, res) {
@@ -18,10 +19,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { pdfBase64, prompt } = req.body || {};
-    if (!pdfBase64 || !prompt) {
-      return res.status(400).json({ error: "Missing pdfBase64 or prompt" });
+    const { pdfBase64, pdfUrl, prompt } = req.body || {};
+    if (!prompt) {
+      return res.status(400).json({ error: "Missing prompt" });
     }
+    if (!pdfBase64 && !pdfUrl) {
+      return res.status(400).json({ error: "Missing pdfBase64 or pdfUrl" });
+    }
+
+    // Build the document source: prefer URL when provided (large files),
+    // fall back to base64 (small files).
+    const documentSource = pdfUrl
+      ? { type: "url", url: pdfUrl }
+      : { type: "base64", media_type: "application/pdf", data: pdfBase64 };
 
     const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -31,12 +41,12 @@ export default async function handler(req, res) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-model: "claude-sonnet-4-6",
+        model: "claude-sonnet-4-6",
         max_tokens: 2000,
         messages: [{
           role: "user",
           content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdfBase64 } },
+            { type: "document", source: documentSource },
             { type: "text", text: prompt },
           ],
         }],
@@ -59,7 +69,8 @@ model: "claude-sonnet-4-6",
   }
 }
 
-// Vercel: allow PDFs up to ~10MB
+// Vercel: small base64 PDFs use this path; larger ones go via signed URL so the
+// body stays tiny. 10 MB ceiling is plenty for either case.
 export const config = {
   api: {
     bodyParser: { sizeLimit: "10mb" },

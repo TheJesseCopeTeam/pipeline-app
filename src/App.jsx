@@ -6232,7 +6232,31 @@ function ClientPortalSection({ txn, onUpdate }) {
   const [newClientEmail, setNewClientEmail] = useState("");
   const [newClientName, setNewClientName] = useState("");
 
+  // clientNotes uses local state with a debounced cloud save so typing doesn't
+  // trigger a save on every keystroke (which was making the textarea lag and
+  // jump). This matches the pattern Quick Notes uses.
+  const [notesLocal, setNotesLocal] = useState(portal.clientNotes || "");
+  const notesDebounceRef = useRef(null);
+
+  // Pull in external changes from cloud realtime — but only if we're not
+  // actively editing (avoid clobbering user's in-progress typing).
+  useEffect(() => {
+    if (notesDebounceRef.current === null) {
+      setNotesLocal(portal.clientNotes || "");
+    }
+  }, [portal.clientNotes]);
+
   const updatePortal = (patch) => onUpdate({ ...txn, clientPortal: { ...portal, ...patch } });
+
+  const handleNotesChange = (e) => {
+    const v = e.target.value;
+    setNotesLocal(v);
+    if (notesDebounceRef.current) clearTimeout(notesDebounceRef.current);
+    notesDebounceRef.current = setTimeout(() => {
+      updatePortal({ clientNotes: v });
+      notesDebounceRef.current = null;
+    }, 800);
+  };
 
   const addClient = () => {
     const email = newClientEmail.trim().toLowerCase();
@@ -6368,8 +6392,8 @@ function ClientPortalSection({ txn, onUpdate }) {
                 Notes to Client
               </div>
               <textarea
-                value={portal.clientNotes || ""}
-                onChange={(e) => updatePortal({ clientNotes: e.target.value })}
+                value={notesLocal}
+                onChange={handleNotesChange}
                 placeholder="Updates, reminders, or messages the client will see. Separate from your private notes."
                 style={{ ...styles.input, minHeight: 80, resize: "vertical", fontFamily: "var(--font-body)" }} />
             </div>

@@ -52,6 +52,20 @@ const STATUS_OPTIONS = [
   { value: "fellThrough",   label: "Fell Through",   color: "#a94d4d" },
 ];
 
+// ─── Stage helpers ─────────────────────────────────────────────────────────
+// Transactions are bucketed into one of three stages based on their status.
+// Used by the Active/Pending/Closed tabs.
+function isClosedStage(txn) {
+  return txn.status === "closed" || txn.status === "fellThrough";
+}
+function isPendingStage(txn) {
+  return txn.status === "pending" || txn.status === "underContract";
+}
+function isActiveStage(txn) {
+  // Anything that's not pending or closed counts as active.
+  return !isPendingStage(txn) && !isClosedStage(txn);
+}
+
 const FINANCING_TYPES = ["Conventional", "FHA", "VA", "USDA", "Cash", "Other"];
 
 // Fields that are ABSOLUTELY NEVER shared with clients via the portal.
@@ -1229,8 +1243,9 @@ function MainApp({ user }) {
 
   const filtered = useMemo(() => {
     let list = transactions;
-    if (view === "listings") list = list.filter(t => t.type === "listing");
-    if (view === "buyers")   list = list.filter(t => t.type === "buyer");
+    if (view === "listings") list = list.filter(t => isActiveStage(t));
+    if (view === "buyers")   list = list.filter(t => isPendingStage(t));
+    if (view === "closed")   list = list.filter(t => isClosedStage(t));
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(t =>
@@ -1327,8 +1342,9 @@ function MainApp({ user }) {
             { id: "todos",          label: "To-Dos",               icon: CheckCircle2 },
             { id: "dashboard",      label: "Pipeline",             icon: TrendingUp },
             { id: "futureListings", label: "Future Listings",      icon: Home },
-            { id: "listings",       label: "Listing Transactions", icon: Briefcase },
-            { id: "buyers",         label: "Selling Transactions", icon: Users },
+            { id: "listings",       label: "Active Transactions",  icon: Briefcase },
+            { id: "buyers",         label: "Pending Transactions", icon: Users },
+            { id: "closed",         label: "Closed Transactions",  icon: CheckCircle2 },
             { id: "futureBuyers",   label: "Future Buyers",        icon: UserCircle2 },
             { id: "vendors",        label: "Vendors",              icon: Package },
           ].map(tab => {
@@ -1338,8 +1354,9 @@ function MainApp({ user }) {
               <button key={tab.id} onClick={() => setView(tab.id)} style={{ ...styles.navTab, ...(active ? styles.navTabActive : {}) }}>
                 <Icon size={14} />
                 {tab.label}
-                {tab.id === "listings" && <span style={styles.tabCount}>{transactions.filter(t => t.type === "listing").length}</span>}
-                {tab.id === "buyers"   && <span style={styles.tabCount}>{transactions.filter(t => t.type === "buyer").length}</span>}
+                {tab.id === "listings" && <span style={styles.tabCount}>{transactions.filter(t => isActiveStage(t)).length}</span>}
+                {tab.id === "buyers"   && <span style={styles.tabCount}>{transactions.filter(t => isPendingStage(t)).length}</span>}
+                {tab.id === "closed"   && <span style={styles.tabCount}>{transactions.filter(t => isClosedStage(t)).length}</span>}
                 {tab.id === "futureListings" && (isCloud ? (futureListings.length > 0 ? <span style={styles.tabCount}>{futureListings.length}</span> : null) : <FutureListingCountBadge />)}
                 {tab.id === "futureBuyers" && (isCloud ? (futureBuyers.length > 0 ? <span style={styles.tabCount}>{futureBuyers.length}</span> : null) : <FutureBuyerCountBadge />)}
                 {tab.id === "vendors" && (isCloud ? (vendors.length > 0 ? <span style={styles.tabCount}>{vendors.length}</span> : null) : <VendorCountBadge />)}
@@ -3147,15 +3164,39 @@ function TransactionCard({ txn, onClick }) {
 }
 
 function EmptyState({ type, onCreate }) {
-  const label = type === "buyers" ? "buyer" : "listing";
+  if (type === "closed") {
+    return (
+      <div style={styles.welcomeCard}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 28, color: "var(--ink)", marginBottom: 8 }}>
+          No closed transactions yet.
+        </div>
+        <p style={{ color: "var(--ink-soft)", marginBottom: 20 }}>
+          Deals marked sold or completed will appear here as a permanent archive.
+        </p>
+      </div>
+    );
+  }
+  if (type === "buyers") {
+    return (
+      <div style={styles.welcomeCard}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 28, color: "var(--ink)", marginBottom: 8 }}>
+          No pending transactions.
+        </div>
+        <p style={{ color: "var(--ink-soft)", marginBottom: 20 }}>
+          Transactions under contract appear here. Click "Transfer to Pending" on an active transaction to move it here.
+        </p>
+      </div>
+    );
+  }
+  // Default — Active Transactions
   return (
     <div style={styles.welcomeCard}>
       <div style={{ fontFamily: "var(--font-display)", fontSize: 28, color: "var(--ink)", marginBottom: 8 }}>
         Nothing here yet.
       </div>
-      <p style={{ color: "var(--ink-soft)", marginBottom: 20 }}>Add your first {label} to start tracking it.</p>
+      <p style={{ color: "var(--ink-soft)", marginBottom: 20 }}>Add your first listing to start tracking it.</p>
       <button onClick={onCreate} style={{ ...styles.btn, ...styles.btnPrimary }}>
-        <Plus size={14} /> New {label}
+        <Plus size={14} /> New Listing
       </button>
     </div>
   );
@@ -5415,13 +5456,25 @@ function ChecklistSection({ title, icon: Icon, items, onChange, templates, onApp
 // ════════════════════════════════════════════════════════════════════════════
 // TEMPLATE EDITOR — manage prelist and closing templates
 // ════════════════════════════════════════════════════════════════════════════
-function TemplateEditorModal({ kind, onClose, isCloud, updateSetting }) {
+function TemplateEditorModal({ kind: initialKind, onClose, isCloud, updateSetting }) {
+  // Allow switching between prelist and closing templates inside the same modal
+  const [kind, setKind] = useState(initialKind || "prelist");
   const [templates, setTemplates] = useState(
     kind === "prelist" ? loadPrelistTemplates() : [loadClosingTemplate()]
   );
   const [activeId, setActiveId] = useState(templates[0]?.id);
   const active = templates.find(t => t.id === activeId);
   const [newItemText, setNewItemText] = useState("");
+
+  // When switching template kind, reload the templates and pick the first
+  const switchKind = (newKind) => {
+    if (newKind === kind) return;
+    const fresh = newKind === "prelist" ? loadPrelistTemplates() : [loadClosingTemplate()];
+    setKind(newKind);
+    setTemplates(fresh);
+    setActiveId(fresh[0]?.id);
+    setNewItemText("");
+  };
 
   const save = () => {
     if (kind === "prelist") {
@@ -5462,10 +5515,40 @@ function TemplateEditorModal({ kind, onClose, isCloud, updateSetting }) {
           <div>
             <div style={styles.eyebrow}>Templates</div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--ink)" }}>
-              {kind === "prelist" ? "Pre-Listing Checklists" : "Closing Checklist"}
+              Edit Checklists
             </div>
           </div>
           <button onClick={onClose} style={styles.iconBtn}><X size={18} /></button>
+        </div>
+        <div style={{ display: "flex", gap: 6, padding: "0 20px", borderBottom: "1px solid var(--ink-line)" }}>
+          <button onClick={() => switchKind("prelist")}
+            style={{
+              padding: "10px 14px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: kind === "prelist" ? 600 : 400,
+              color: kind === "prelist" ? "var(--ink)" : "var(--ink-soft)",
+              borderBottom: kind === "prelist" ? "2px solid var(--accent)" : "2px solid transparent",
+              marginBottom: -1,
+            }}>
+            Pre-Listing
+          </button>
+          <button onClick={() => switchKind("closing")}
+            style={{
+              padding: "10px 14px",
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: kind === "closing" ? 600 : 400,
+              color: kind === "closing" ? "var(--ink)" : "var(--ink-soft)",
+              borderBottom: kind === "closing" ? "2px solid var(--accent)" : "2px solid transparent",
+              marginBottom: -1,
+            }}>
+            Closing
+          </button>
         </div>
         <div style={styles.modalBody}>
           {kind === "prelist" && (
@@ -5698,7 +5781,7 @@ function DraftEmailButton({ label, hint, available, onClick }) {
 // ════════════════════════════════════════════════════════════════════════════
 // DOCUMENT STORAGE
 // Files stored as base64 in localStorage under separate keys (small files only).
-// Will auto-migrate to Supabase Storage in Phase 2B.
+// Will use Supabase Storage in cloud mode, localStorage in local mode.
 // ════════════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════════════
 // DOCUMENT STORAGE — localStorage for local mode, Supabase Storage for cloud
@@ -5821,18 +5904,28 @@ async function downloadDocument(doc, isCloud) {
 }
 
 async function openDocument(doc, isCloud) {
+  // Open the window FIRST (synchronously, while we're still in the click
+  // handler's call stack) — otherwise browsers block popups for async opens.
+  const win = window.open("about:blank");
+  if (!win) {
+    alert("Pop-up blocked. Allow pop-ups for this site, or use Download instead.");
+    return;
+  }
+  // Show a quick loading message while we fetch
+  try {
+    win.document.write('<html><body style="font-family:system-ui;padding:40px;color:#666">Loading document…</body></html>');
+  } catch (e) {}
+
   const base64 = await loadDocumentBlob(doc.id, isCloud);
   if (!base64) {
+    win.close();
     alert("Document data not found.");
     return;
   }
-  const win = window.open();
-  if (!win) {
-    alert("Pop-up blocked. Allow pop-ups or use Download.");
-    return;
-  }
   if (doc.type?.startsWith("image/")) {
+    win.document.open();
     win.document.write(`<html><head><title>${escapeHTML(doc.name)}</title></head><body style="margin:0;background:#222;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="data:${doc.type};base64,${base64}" style="max-width:100%;max-height:100vh" /></body></html>`);
+    win.document.close();
   } else if (doc.type === "application/pdf") {
     win.location.href = `data:application/pdf;base64,${base64}`;
   } else {
@@ -6013,13 +6106,17 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
         )}
 
         <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-soft)", display: "flex", justifyContent: "space-between" }}>
-          <span>PDF, images, Office docs · Max {formatFileSize(MAX_FILE_SIZE)} per file</span>
-          <span style={{ fontWeight: 500 }}>
-            {formatFileSize(totalDocBytes())} of {formatFileSize(MAX_TOTAL_DOC_SIZE)} used
-          </span>
+          <span>PDF, images, Office docs · Max {formatFileSize(isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE)} per file</span>
+          {!isCloud && (
+            <span style={{ fontWeight: 500 }}>
+              {formatFileSize(totalDocBytes())} of {formatFileSize(MAX_TOTAL_DOC_SIZE)} used
+            </span>
+          )}
         </div>
         <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)" }}>
-          📍 Stored on this device only. Will sync to cloud when Phase 2B (cloud document storage) is set up.
+          {isCloud
+            ? "☁ Stored in cloud — syncs across all your devices."
+            : "📍 Stored on this device only. Sign in for cloud sync."}
         </div>
       </div>
     </div>
@@ -6643,6 +6740,56 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
             </div>
           </div>
           <button onClick={onClose} style={styles.iconBtn}><X size={18} /></button>
+        </div>
+
+        {/* ─── Stage transfer buttons ─────────────────────────────────────
+            Quick way to move this transaction between Active / Pending / Closed
+            without opening the edit form. Different buttons depending on
+            the transaction's current stage. */}
+        <div style={{
+          display: "flex",
+          gap: 8,
+          padding: "12px 20px",
+          background: "var(--paper-soft)",
+          borderBottom: "1px solid var(--ink-line)",
+          flexWrap: "wrap",
+        }}>
+          {isActiveStage(txn) && (
+            <button
+              onClick={() => onUpdate({ ...txn, status: "pending" })}
+              style={{ ...styles.btn, ...styles.btnPrimary, fontSize: 12 }}
+              title="Move this transaction to the Pending Transactions tab">
+              → Transfer to Pending
+            </button>
+          )}
+          {isPendingStage(txn) && (
+            <>
+              <button
+                onClick={() => onUpdate({ ...txn, status: "active" })}
+                style={{ ...styles.btn, ...styles.btnGhost, fontSize: 12 }}
+                title="Deal fell through — return to Active Transactions">
+                ← Back to Active
+              </button>
+              <button
+                onClick={() => {
+                  if (confirm("Mark this transaction as Sold? It will move to the Closed Transactions tab.")) {
+                    onUpdate({ ...txn, status: "closed" });
+                  }
+                }}
+                style={{ ...styles.btn, ...styles.btnPrimary, fontSize: 12, background: "#7b9a5a", borderColor: "#7b9a5a" }}
+                title="Mark sold and move to Closed">
+                ✓ Mark Sold
+              </button>
+            </>
+          )}
+          {isClosedStage(txn) && (
+            <button
+              onClick={() => onUpdate({ ...txn, status: "active" })}
+              style={{ ...styles.btn, ...styles.btnGhost, fontSize: 12 }}
+              title="Move back to Active">
+              ↺ Reopen as Active
+            </button>
+          )}
         </div>
 
         <div style={styles.modalBody}>

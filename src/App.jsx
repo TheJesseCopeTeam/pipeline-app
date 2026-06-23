@@ -999,6 +999,18 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authChecking, setAuthChecking] = useState(true);
 
+  // ── Portal route detection ──────────────────────────────────────────────
+  // If the URL is /portal/{token}, render the public ClientPortalView
+  // instead of the broker app. Read once at mount.
+  const portalToken = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const m = window.location.pathname.match(/^\/portal\/([A-Za-z0-9_-]+)\/?$/);
+    return m ? m[1] : null;
+  }, []);
+  if (portalToken) {
+    return <ClientPortalView token={portalToken} />;
+  }
+
   useEffect(() => {
     if (!supabaseConfigured) {
       // Local-only mode (no Supabase env vars set yet)
@@ -6224,6 +6236,67 @@ ${txn.notes ? `<h2>Notes</h2><div class="notes-block">${safe(txn.notes)}</div>` 
 // ════════════════════════════════════════════════════════════════════════════
 // CLIENT PORTAL MANAGER — per-transaction access (data model ready, login in Phase 2)
 // ════════════════════════════════════════════════════════════════════════════
+// ─── Portal token generation ─────────────────────────────────────────────
+// Generates a long, unguessable random token used as a portal access key.
+// Format: 8 random URL-safe segments, joined with "-", ~64 characters.
+function generatePortalToken() {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const segment = () => Array.from({ length: 8 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  return [segment(), segment(), segment(), segment()].join("-");
+}
+
+function PortalLinkBox({ portalToken, onGenerate, onRegenerate }) {
+  const [copied, setCopied] = useState(false);
+  const portalUrl = portalToken ? `${window.location.origin}/portal/${portalToken}` : "";
+
+  const copy = () => {
+    if (!portalUrl) return;
+    navigator.clipboard.writeText(portalUrl).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
+      () => alert("Couldn't copy. Select the link manually and copy.")
+    );
+  };
+
+  if (!portalToken) {
+    return (
+      <div style={{ marginBottom: 16, padding: 14, background: "var(--paper)", border: "1px dashed var(--ink-line)", borderRadius: 8 }}>
+        <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>
+          No portal link generated yet. Click below to create a unique link for this transaction.
+        </div>
+        <button onClick={onGenerate} style={{ ...styles.btn, ...styles.btnPrimary, fontSize: 12 }}>
+          Generate Portal Link
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 16, padding: 14, background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-soft)", fontWeight: 600, marginBottom: 8 }}>
+        Portal Link
+      </div>
+      <div style={{ fontSize: 11, color: "var(--ink)", padding: "8px 10px", background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 6, wordBreak: "break-all", fontFamily: "monospace", marginBottom: 8 }}>
+        {portalUrl}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button onClick={copy} style={{ ...styles.btn, ...styles.btnPrimary, fontSize: 12 }}>
+          {copied ? "✓ Copied" : "Copy Link"}
+        </button>
+        <a href={portalUrl} target="_blank" rel="noopener noreferrer"
+          style={{ ...styles.btn, ...styles.btnGhost, fontSize: 12, textDecoration: "none" }}>
+          Preview as Client
+        </a>
+        <button onClick={onRegenerate} style={{ ...styles.btn, ...styles.btnGhost, fontSize: 12 }}>
+          Regenerate
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 8, lineHeight: 1.5 }}>
+        Email or text this link to your client. Anyone with the link can view (but not edit) this transaction. Regenerate to revoke an old link.
+      </div>
+    </div>
+  );
+}
+
 function ClientPortalSection({ txn, onUpdate }) {
   const portal = txn.clientPortal || { enabled: false, clients: [], visibleMilestones: [], clientNotes: "", showFinancials: true };
   // Inline form for adding a new client — replaces the browser prompt() calls,
@@ -6294,17 +6367,30 @@ function ClientPortalSection({ txn, onUpdate }) {
             <input type="checkbox" checked={portal.enabled} onChange={(e) => updatePortal({ enabled: e.target.checked })} />
             <span style={{ fontSize: 13, fontWeight: 500 }}>Enable client portal for this transaction</span>
           </label>
-          <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "rgba(196, 96, 47, 0.1)", color: "var(--accent)", fontWeight: 600 }}>
-            PHASE 2
+          <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: portal.enabled ? "rgba(123, 154, 90, 0.15)" : "rgba(107, 117, 133, 0.1)", color: portal.enabled ? "#5d7a44" : "var(--ink-soft)", fontWeight: 600 }}>
+            {portal.enabled ? "ACTIVE" : "INACTIVE"}
           </span>
         </div>
         <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 16, lineHeight: 1.5 }}>
-          Configure access now — clients will be able to log in once the cloud backend is deployed (Phase 2).
-          Settings below will activate automatically then.
+          Generates a unique view-only link your client can use to see this transaction's status, timeline, and documents. No client login required — just send them the link.
         </div>
 
         {portal.enabled && (
           <>
+            {/* ─── Portal link section ───────────────────────────────────────
+                Token is auto-generated when portal is enabled. Broker can copy the
+                link, regenerate it to revoke access, or open it in a new tab to
+                preview what the client sees. */}
+            <PortalLinkBox
+              portalToken={txn.portalToken}
+              onGenerate={() => onUpdate({ ...txn, portalToken: generatePortalToken() })}
+              onRegenerate={() => {
+                if (confirm("Regenerate the link? The old link will stop working immediately.")) {
+                  onUpdate({ ...txn, portalToken: generatePortalToken() });
+                }
+              }}
+            />
+
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-soft)", fontWeight: 600, marginBottom: 8 }}>
                 Clients with access
@@ -7349,6 +7435,211 @@ function Style() {
         background: var(--paper-soft) !important;
       }
     `}</style>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CLIENT PORTAL VIEW — public read-only page for clients
+// ════════════════════════════════════════════════════════════════════════════
+function ClientPortalView({ token }) {
+  const [state, setState] = useState({ loading: true, error: null, txn: null });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/portal-fetch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setState({ loading: false, error: data.error || `Couldn't load portal (${res.status})`, txn: null });
+          return;
+        }
+        setState({ loading: false, error: null, txn: data.transaction });
+      } catch (e) {
+        setState({ loading: false, error: e.message || "Network error", txn: null });
+      }
+    })();
+  }, [token]);
+
+  const wrap = {
+    minHeight: "100vh",
+    background: "#f5f6f8",
+    color: "#1a2c47",
+    fontFamily: "var(--font-body), system-ui, sans-serif",
+    padding: "40px 20px",
+  };
+  const card = {
+    maxWidth: 760,
+    margin: "0 auto",
+    background: "#fff",
+    border: "1px solid #d3d7df",
+    borderRadius: 16,
+    overflow: "hidden",
+  };
+
+  if (state.loading) {
+    return (
+      <div style={wrap}>
+        <div style={{ ...card, padding: 40, textAlign: "center", color: "#6b7585" }}>
+          Loading your transaction…
+        </div>
+      </div>
+    );
+  }
+
+  if (state.error) {
+    return (
+      <div style={wrap}>
+        <div style={{ ...card, padding: 40, textAlign: "center" }}>
+          <div style={{ fontFamily: "var(--font-display), Georgia, serif", fontSize: 22, marginBottom: 8 }}>
+            Link not active
+          </div>
+          <div style={{ color: "#6b7585", fontSize: 14 }}>{state.error}</div>
+          <div style={{ color: "#6b7585", fontSize: 13, marginTop: 16 }}>
+            Please contact your broker for an updated link.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const txn = state.txn;
+  const portal = txn.clientPortal || {};
+  const sortedMs = (txn.milestones || [])
+    .slice()
+    .sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date < b.date ? -1 : 1;
+    });
+  const docs = txn.documents || [];
+
+  return (
+    <div style={wrap}>
+      <div style={card}>
+        {/* Header */}
+        <div style={{ padding: "28px 32px 20px", borderBottom: "1px solid #d3d7df", background: "#1a2c47", color: "#f5f6f8" }}>
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.12em", color: "#a8b4c4", marginBottom: 8 }}>
+            Transaction Portal · The Jesse Cope Team
+          </div>
+          <div style={{ fontFamily: "var(--font-display), Georgia, serif", fontSize: 26, lineHeight: 1.2 }}>
+            {txn.address || "Your Transaction"}
+          </div>
+          <div style={{ fontSize: 14, color: "#a8b4c4", marginTop: 4 }}>
+            {[txn.city, txn.state, txn.zip].filter(Boolean).join(", ") || ""}
+          </div>
+        </div>
+
+        {/* Status */}
+        <div style={{ padding: "20px 32px", borderBottom: "1px solid #d3d7df", background: "#eaecf0" }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", marginBottom: 4 }}>Status</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                {(txn.status || "active").replace(/([A-Z])/g, " $1").replace(/^./, c => c.toUpperCase())}
+              </div>
+            </div>
+            {txn.closingDate && (
+              <div>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", marginBottom: 4 }}>Closing Date</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>
+                  {new Date(txn.closingDate + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                </div>
+              </div>
+            )}
+            {txn.price && portal.showFinancials !== false && (
+              <div>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", marginBottom: 4 }}>Price</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>
+                  ${Number(txn.price).toLocaleString()}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Notes from broker */}
+        {portal.clientNotes && (
+          <div style={{ padding: "20px 32px", borderBottom: "1px solid #d3d7df" }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", fontWeight: 600, marginBottom: 10 }}>
+              Notes from your Broker
+            </div>
+            <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+              {portal.clientNotes}
+            </div>
+          </div>
+        )}
+
+        {/* Timeline */}
+        {sortedMs.length > 0 && (
+          <div style={{ padding: "20px 32px", borderBottom: "1px solid #d3d7df" }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", fontWeight: 600, marginBottom: 12 }}>
+              Timeline
+            </div>
+            {sortedMs.map(m => (
+              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid #eaecf0" }}>
+                <div style={{
+                  width: 12, height: 12, borderRadius: "50%",
+                  background: m.complete ? "#7b9a5a" : "#d3d7df",
+                  flexShrink: 0,
+                }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: m.complete ? 400 : 500, color: m.complete ? "#6b7585" : "#1a2c47", textDecoration: m.complete ? "line-through" : "none" }}>
+                    {m.label}
+                  </div>
+                </div>
+                {m.date && (
+                  <div style={{ fontSize: 12, color: "#6b7585" }}>
+                    {new Date(m.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Documents */}
+        {docs.length > 0 && (
+          <div style={{ padding: "20px 32px", borderBottom: "1px solid #d3d7df" }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", fontWeight: 600, marginBottom: 12 }}>
+              Documents
+            </div>
+            {docs.map(doc => (
+              <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: "1px solid #eaecf0" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{doc.name}</div>
+                  <div style={{ fontSize: 11, color: "#6b7585" }}>
+                    {doc.size ? `${(doc.size / 1024).toFixed(0)} KB` : ""}
+                  </div>
+                </div>
+                {doc.downloadUrl ? (
+                  <a href={doc.downloadUrl} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize: 12, color: "#c4602f", textDecoration: "none", padding: "6px 12px", border: "1px solid #c4602f", borderRadius: 6 }}>
+                    Download
+                  </a>
+                ) : (
+                  <div style={{ fontSize: 11, color: "#6b7585", fontStyle: "italic" }}>Unavailable</div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Contact footer */}
+        <div style={{ padding: "20px 32px", background: "#eaecf0", textAlign: "center", fontSize: 12, color: "#6b7585" }}>
+          Questions? Contact The Jesse Cope Team · RE/MAX Premier Group
+          <br />
+          842 Washington Way, Suite 150, Longview, WA 98632
+        </div>
+      </div>
+      <div style={{ textAlign: "center", color: "#6b7585", fontSize: 11, marginTop: 16 }}>
+        This is a secure read-only view. Bookmark this page to revisit.
+      </div>
+    </div>
   );
 }
 

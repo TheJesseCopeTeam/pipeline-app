@@ -6226,16 +6226,27 @@ ${txn.notes ? `<h2>Notes</h2><div class="notes-block">${safe(txn.notes)}</div>` 
 // ════════════════════════════════════════════════════════════════════════════
 function ClientPortalSection({ txn, onUpdate }) {
   const portal = txn.clientPortal || { enabled: false, clients: [], visibleMilestones: [], clientNotes: "", showFinancials: true };
+  // Inline form for adding a new client — replaces the browser prompt() calls,
+  // which were unreliable and caused the modal to feel like it was closing.
+  const [showAddClient, setShowAddClient] = useState(false);
+  const [newClientEmail, setNewClientEmail] = useState("");
+  const [newClientName, setNewClientName] = useState("");
 
   const updatePortal = (patch) => onUpdate({ ...txn, clientPortal: { ...portal, ...patch } });
 
   const addClient = () => {
-    const email = prompt("Client email address:");
-    if (!email || !email.includes("@")) return;
-    const name = prompt("Display name for this client:", email.split("@")[0]) || email;
+    const email = newClientEmail.trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+    const name = newClientName.trim() || email.split("@")[0];
     updatePortal({
-      clients: [...portal.clients, { id: newId(), email: email.trim().toLowerCase(), name: name.trim(), addedAt: new Date().toISOString() }],
+      clients: [...portal.clients, { id: newId(), email, name, addedAt: new Date().toISOString() }],
     });
+    setNewClientEmail("");
+    setNewClientName("");
+    setShowAddClient(false);
   };
   const removeClient = (id) => {
     if (!confirm("Revoke this client's access?")) return;
@@ -6291,9 +6302,39 @@ function ClientPortalSection({ txn, onUpdate }) {
                   </button>
                 </div>
               ))}
-              <button onClick={addClient} style={{ ...styles.btn, ...styles.btnGhost, padding: "6px 12px", fontSize: 12, marginTop: 8 }}>
-                <Plus size={12} /> Add client
-              </button>
+              {!showAddClient ? (
+                <button onClick={() => setShowAddClient(true)} style={{ ...styles.btn, ...styles.btnGhost, padding: "6px 12px", fontSize: 12, marginTop: 8 }}>
+                  <Plus size={12} /> Add client
+                </button>
+              ) : (
+                <div style={{ marginTop: 8, padding: 12, background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8 }}>New Client</div>
+                  <input
+                    type="email"
+                    value={newClientEmail}
+                    onChange={(e) => setNewClientEmail(e.target.value)}
+                    placeholder="Email address"
+                    style={{ ...styles.input, marginBottom: 6 }}
+                    autoFocus
+                  />
+                  <input
+                    type="text"
+                    value={newClientName}
+                    onChange={(e) => setNewClientName(e.target.value)}
+                    placeholder="Display name (optional)"
+                    style={{ ...styles.input, marginBottom: 8 }}
+                  />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={addClient} style={{ ...styles.btn, ...styles.btnPrimary, fontSize: 12, flex: 1 }}>
+                      Add Client
+                    </button>
+                    <button onClick={() => { setShowAddClient(false); setNewClientEmail(""); setNewClientName(""); }}
+                      style={{ ...styles.btn, ...styles.btnGhost, fontSize: 12 }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div style={{ marginBottom: 16 }}>
@@ -6348,10 +6389,20 @@ function FormModal({ txn, onClose, onSave }) {
   const [parseError, setParseError] = useState("");
   const [parseSuccess, setParseSuccess] = useState("");
   const [newMilestoneLabel, setNewMilestoneLabel] = useState("");
+  // Track whether the form has been edited so we can warn before losing changes.
+  const [isDirty, setIsDirty] = useState(false);
   const listingInputRef  = useRef(null);
   const purchaseInputRef = useRef(null);
 
   const isNew = !(txn.address || txn.sellerName || txn.buyerName || txn.price);
+
+  // Wrap onClose with confirmation if the form has unsaved changes.
+  const safeClose = () => {
+    if (isDirty) {
+      if (!confirm("Discard your changes? Anything you haven't saved will be lost.")) return;
+    }
+    onClose();
+  };
 
   const handleUpload = async (e, kind) => {
     const file = e.target.files?.[0];
@@ -6365,6 +6416,7 @@ function FormModal({ txn, onClose, onSave }) {
         ? applyListingAgreement(form, extracted)
         : applyPurchaseContract(form, extracted);
       setForm(merged);
+      setIsDirty(true);
       setParseSuccess(kind === "listing"
         ? "Listing agreement parsed — review fields below."
         : "Purchase contract parsed — review the timeline and save.");
@@ -6378,15 +6430,21 @@ function FormModal({ txn, onClose, onSave }) {
     }
   };
 
-  const update = (field, value) => setForm({ ...form, [field]: value });
-  const updateContact = (role, field, value) => setForm({
-    ...form,
-    contacts: { ...form.contacts, [role]: { ...form.contacts[role], [field]: value } },
-  });
-  const updateMilestone = (id, field, value) => setForm({
-    ...form,
-    milestones: form.milestones.map(m => m.id === id ? { ...m, [field]: value } : m),
-  });
+  const update = (field, value) => { setForm({ ...form, [field]: value }); setIsDirty(true); };
+  const updateContact = (role, field, value) => {
+    setForm({
+      ...form,
+      contacts: { ...form.contacts, [role]: { ...form.contacts[role], [field]: value } },
+    });
+    setIsDirty(true);
+  };
+  const updateMilestone = (id, field, value) => {
+    setForm({
+      ...form,
+      milestones: form.milestones.map(m => m.id === id ? { ...m, [field]: value } : m),
+    });
+    setIsDirty(true);
+  };
   const addCustomMilestone = () => {
     if (!newMilestoneLabel.trim()) return;
     setForm({
@@ -6398,14 +6456,18 @@ function FormModal({ txn, onClose, onSave }) {
       }],
     });
     setNewMilestoneLabel("");
+    setIsDirty(true);
   };
-  const removeMilestone = (id) => setForm({
-    ...form,
-    milestones: form.milestones.filter(m => m.id !== id),
-  });
+  const removeMilestone = (id) => {
+    setForm({
+      ...form,
+      milestones: form.milestones.filter(m => m.id !== id),
+    });
+    setIsDirty(true);
+  };
 
   return (
-    <div style={styles.modalBackdrop} onClick={onClose}>
+    <div style={styles.modalBackdrop} onClick={safeClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div>
@@ -6414,7 +6476,7 @@ function FormModal({ txn, onClose, onSave }) {
               {isNew ? "New Transaction" : "Edit Transaction"}
             </div>
           </div>
-          <button onClick={onClose} style={styles.iconBtn}><X size={18} /></button>
+          <button onClick={safeClose} style={styles.iconBtn}><X size={18} /></button>
         </div>
 
         <div style={styles.modalBody}>
@@ -6639,7 +6701,7 @@ function FormModal({ txn, onClose, onSave }) {
         </div>
 
         <div style={styles.modalFooter}>
-          <button onClick={onClose} style={{ ...styles.btn, ...styles.btnGhost }}>Cancel</button>
+          <button onClick={safeClose} style={{ ...styles.btn, ...styles.btnGhost }}>Cancel</button>
           <button onClick={() => onSave(form)} style={{ ...styles.btn, ...styles.btnPrimary }}>Save Transaction</button>
         </div>
       </div>
@@ -6714,7 +6776,7 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
   const hasContacts = CONTACT_ROLES.some(r => txn.contacts[r.key].name);
 
   return (
-    <div style={styles.modalBackdrop} onClick={onClose}>
+    <div style={styles.modalBackdrop}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div style={{ flex: 1, minWidth: 0 }}>

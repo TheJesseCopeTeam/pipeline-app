@@ -1000,12 +1000,20 @@ export default function App() {
   const [authChecking, setAuthChecking] = useState(true);
 
   // ── Portal route detection ──────────────────────────────────────────────
-  // If the URL is /portal/{token}, render the public ClientPortalView
-  // instead of the broker app. Read once at mount.
+  // If the URL is /portal/{token} (path-based, requires SPA rewrites in
+  // Vercel) OR /#/portal/{token} (hash-based, works everywhere without
+  // server config), render the public ClientPortalView instead of the
+  // broker app. Hash-based is the more reliable form because hashes
+  // never reach the server.
   const portalToken = useMemo(() => {
     if (typeof window === "undefined") return null;
-    const m = window.location.pathname.match(/^\/portal\/([A-Za-z0-9_-]+)\/?$/);
-    return m ? m[1] : null;
+    const path = window.location.pathname;
+    const hash = window.location.hash || "";
+    const pathMatch = path.match(/^\/portal\/([A-Za-z0-9_-]+)\/?$/);
+    if (pathMatch) return pathMatch[1];
+    const hashMatch = hash.match(/^#\/portal\/([A-Za-z0-9_-]+)\/?$/);
+    if (hashMatch) return hashMatch[1];
+    return null;
   }, []);
   if (portalToken) {
     return <ClientPortalView token={portalToken} />;
@@ -6247,7 +6255,7 @@ function generatePortalToken() {
 
 function PortalLinkBox({ portalToken, onGenerate, onRegenerate }) {
   const [copied, setCopied] = useState(false);
-  const portalUrl = portalToken ? `${window.location.origin}/portal/${portalToken}` : "";
+  const portalUrl = portalToken ? `${window.location.origin}/#/portal/${portalToken}` : "";
 
   const copy = () => {
     if (!portalUrl) return;

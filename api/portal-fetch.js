@@ -114,7 +114,10 @@ export default async function handler(req, res) {
         }
         try {
           const path = `${ownerId}/${doc.id}`;
-          const signUrl = `${supabaseUrl}/storage/v1/object/sign/documents/${encodeURIComponent(path)}`;
+          // Don't URL-encode the path — Supabase wants literal slashes here.
+          // If we encode, the path Supabase signs differs from the path the
+          // client hits later → "InvalidSignature" error.
+          const signUrl = `${supabaseUrl}/storage/v1/object/sign/documents/${path}`;
           const signRes = await fetch(signUrl, {
             method: "POST",
             headers: {
@@ -125,11 +128,14 @@ export default async function handler(req, res) {
             body: JSON.stringify({ expiresIn: 3600 }),
           });
           if (!signRes.ok) {
+            const errText = await signRes.text();
+            console.error("Sign URL failed:", signRes.status, errText);
             return { ...doc, downloadUrl: null, unavailable: true };
           }
           const signData = await signRes.json();
-          // The returned signedURL is a path; needs to be prefixed
-          const fullUrl = `${supabaseUrl}/storage/v1${signData.signedURL || signData.signedUrl || ''}`;
+          // signedURL is a path starting with /object/sign/... — prefix with the storage base URL
+          const pathSegment = signData.signedURL || signData.signedUrl || "";
+          const fullUrl = `${supabaseUrl}/storage/v1${pathSegment}`;
           return {
             id: doc.id,
             name: doc.name,

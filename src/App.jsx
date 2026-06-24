@@ -87,6 +87,39 @@ const CONTACT_ROLES = [
   { key: "lender",        label: "Lender",          icon: Landmark },
 ];
 
+// Build a deduped directory of all contacts across all transactions.
+// Used for autocomplete suggestions in the contact name fields — if you've
+// already worked with "Brandon Nickel" at Fibre Federal once, typing "Brand"
+// in the next transaction's lender section will offer to fill all his info.
+function getContactDirectory(transactions) {
+  const map = new Map(); // key: lowercase name; value: merged contact info
+  for (const txn of transactions || []) {
+    if (!txn || !txn.contacts) continue;
+    for (const role of CONTACT_ROLES) {
+      const c = txn.contacts[role.key];
+      if (!c || !c.name || !c.name.trim()) continue;
+      const key = c.name.trim().toLowerCase();
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          name: c.name.trim(),
+          company: c.company || "",
+          phone: c.phone || "",
+          email: c.email || "",
+          lastSeen: txn.updatedAt || txn.createdAt || "",
+        });
+      } else {
+        // Merge — prefer non-empty fields from later entries
+        if (!existing.company && c.company) existing.company = c.company;
+        if (!existing.phone && c.phone) existing.phone = c.phone;
+        if (!existing.email && c.email) existing.email = c.email;
+      }
+    }
+  }
+  // Return as array, sorted alphabetically by name
+  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
 const STORAGE_KEY = "rea_transactions_v2";
 const LEGACY_KEY  = "rea_transactions_v1";
 const DEFAULT_REMINDER_DAYS = 5;
@@ -1607,7 +1640,7 @@ function MainApp({ user }) {
         )}
       </main>
 
-      {editing && <FormModal txn={editing} onClose={() => setEditing(null)} onSave={handleSave} />}
+      {editing && <FormModal txn={editing} onClose={() => setEditing(null)} onSave={handleSave} contactDirectory={getContactDirectory(transactions)} />}
       {detail && !editing && (
         <DetailModal txn={detail} onClose={() => setDetail(null)}
           onEdit={() => setEditing(detail)} onDelete={() => handleDelete(detail.id)} onUpdate={handleSave} isCloud={isCloud} />
@@ -6621,7 +6654,7 @@ function ClientPortalSection({ txn, onUpdate }) {
 // ════════════════════════════════════════════════════════════════════════════
 // FORM MODAL (full edit)
 // ════════════════════════════════════════════════════════════════════════════
-function FormModal({ txn, onClose, onSave }) {
+function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
   const [form, setForm] = useState(txn);
   const [parsing, setParsing] = useState(null); // null | "listing" | "purchase"
   const [parseError, setParseError] = useState("");
@@ -6899,8 +6932,21 @@ function FormModal({ txn, onClose, onSave }) {
             return (
               <FormSection key={role.key} title={role.label} icon={Icon}>
                 <Field label="Name">
-                  <input type="text" value={form.contacts[role.key].name}
-                    onChange={(e) => updateContact(role.key, "name", e.target.value)} style={styles.input} />
+                  <SmartContactInput
+                    value={form.contacts[role.key].name}
+                    onChange={(e) => updateContact(role.key, "name", e.target.value)}
+                    onPickContact={(c) => {
+                      setForm({
+                        ...form,
+                        contacts: {
+                          ...form.contacts,
+                          [role.key]: { name: c.name, company: c.company, phone: c.phone, email: c.email },
+                        },
+                      });
+                      setIsDirty(true);
+                    }}
+                    directory={contactDirectory}
+                  />
                 </Field>
                 <Field label="Company">
                   <input type="text" value={form.contacts[role.key].company}
@@ -6943,6 +6989,100 @@ function FormModal({ txn, onClose, onSave }) {
           <button onClick={() => onSave(form)} style={{ ...styles.btn, ...styles.btnPrimary }}>Save Transaction</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Name input with autocomplete from the contact directory. Shows matching
+// contacts in a dropdown as the user types. Clicking a suggestion fires
+// onPickContact with the full contact info — caller is responsible for
+// filling all related fields (name/company/phone/email).
+function SmartContactInput({ value, onChange, onPickContact, directory }) {
+  const [open, setOpen] = useState(false);
+  const blurTimerRef = useRef(null);
+
+  const matches = useMemo(() => {
+    const q = (value || "").trim().toLowerCase();
+    if (!q || !directory) return [];
+    return directory
+      .filter(c => c.name.toLowerCase().includes(q) && c.name.toLowerCase() !== q)
+      .slice(0, 5);
+  }, [value, directory]);
+
+  const showDropdown = open && matches.length > 0;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        type="text"
+        value={value}
+        onChange={onChange}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          // Delay so clicking a suggestion has time to fire onClick before we hide
+          blurTimerRef.current = setTimeout(() => setOpen(false), 150);
+        }}
+        style={styles.input}
+        autoComplete="off"
+      />
+      {showDropdown && (
+        <div style={{
+          position: "absolute",
+          top: "100%",
+          left: 0,
+          right: 0,
+          marginTop: 4,
+          background: "var(--paper)",
+          border: "1px solid var(--ink-line)",
+          borderRadius: 8,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+          zIndex: 50,
+          overflow: "hidden",
+        }}>
+          <div style={{
+            padding: "6px 12px",
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+            color: "var(--ink-soft)",
+            background: "var(--paper-soft)",
+            borderBottom: "1px solid var(--ink-line)",
+          }}>
+            From your contacts
+          </div>
+          {matches.map((m, idx) => (
+            <button
+              key={`${m.name}-${idx}`}
+              type="button"
+              onMouseDown={(e) => {
+                // Use mouseDown (fires before blur) to avoid timing issues
+                e.preventDefault();
+                if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+                onPickContact(m);
+                setOpen(false);
+              }}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "10px 12px",
+                background: "transparent",
+                border: "none",
+                borderBottom: idx < matches.length - 1 ? "1px solid var(--ink-line)" : "none",
+                textAlign: "left",
+                cursor: "pointer",
+                color: "var(--ink)",
+                fontFamily: "var(--font-body)",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--paper-soft)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>{m.name}</div>
+              <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 2 }}>
+                {[m.company, m.phone, m.email].filter(Boolean).join(" · ") || "—"}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

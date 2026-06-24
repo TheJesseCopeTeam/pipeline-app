@@ -4,7 +4,8 @@ import {
   DollarSign, FileText, Trash2, Edit3, CheckCircle2, Circle, Briefcase,
   AlertCircle, ChevronRight, Search, TrendingUp, Clock, Package,
   Upload, Loader2, Download, Sparkles, AlertTriangle, UserCircle2,
-  Landmark, Scale, PiggyBank, Percent, Bell, LogOut, Activity, Send
+  Landmark, Scale, PiggyBank, Percent, Bell, LogOut, Activity, Send,
+  Menu
 } from "lucide-react";
 import {
   supabase, supabaseConfigured,
@@ -1073,6 +1074,18 @@ function MainApp({ user }) {
   const [detail, setDetail] = useState(null);
   const [search, setSearch] = useState("");
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+
+  // Mobile menu state — replaces the horizontal tab bar with a hamburger
+  // drawer on phone-sized screens (< 768px wide).
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" && window.innerWidth < 768
+  );
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showTemplateEditor, setShowTemplateEditor] = useState(null);
   const [showMigration, setShowMigration] = useState(false);
@@ -1356,8 +1369,9 @@ function MainApp({ user }) {
             </button>
           </div>
         </div>
-        <nav style={styles.nav}>
-          {[
+        {(() => {
+          // Tab definitions shared between desktop nav and mobile drawer
+          const tabs = [
             { id: "home",           label: "Home",                 icon: Sparkles },
             { id: "todos",          label: "To-Dos",               icon: CheckCircle2 },
             { id: "dashboard",      label: "Pipeline",             icon: TrendingUp },
@@ -1367,23 +1381,129 @@ function MainApp({ user }) {
             { id: "closed",         label: "Closed Transactions",  icon: CheckCircle2 },
             { id: "futureBuyers",   label: "Future Buyers",        icon: UserCircle2 },
             { id: "vendors",        label: "Vendors",              icon: Package },
-          ].map(tab => {
-            const Icon = tab.icon;
-            const active = view === tab.id;
+          ];
+
+          // Count badge for a given tab (returns null if no badge)
+          const countBadge = (tabId) => {
+            if (tabId === "listings") return <span style={styles.tabCount}>{transactions.filter(t => isActiveStage(t)).length}</span>;
+            if (tabId === "buyers")   return <span style={styles.tabCount}>{transactions.filter(t => isPendingStage(t)).length}</span>;
+            if (tabId === "closed")   return <span style={styles.tabCount}>{transactions.filter(t => isClosedStage(t)).length}</span>;
+            if (tabId === "futureListings") return isCloud ? (futureListings.length > 0 ? <span style={styles.tabCount}>{futureListings.length}</span> : null) : <FutureListingCountBadge />;
+            if (tabId === "futureBuyers")   return isCloud ? (futureBuyers.length > 0 ? <span style={styles.tabCount}>{futureBuyers.length}</span> : null) : <FutureBuyerCountBadge />;
+            if (tabId === "vendors") return isCloud ? (vendors.length > 0 ? <span style={styles.tabCount}>{vendors.length}</span> : null) : <VendorCountBadge />;
+            return null;
+          };
+
+          const currentTab = tabs.find(t => t.id === view) || tabs[0];
+
+          if (isMobile) {
+            // Mobile: hamburger button that toggles a vertical drawer
             return (
-              <button key={tab.id} onClick={() => setView(tab.id)} style={{ ...styles.navTab, ...(active ? styles.navTabActive : {}) }}>
-                <Icon size={14} />
-                {tab.label}
-                {tab.id === "listings" && <span style={styles.tabCount}>{transactions.filter(t => isActiveStage(t)).length}</span>}
-                {tab.id === "buyers"   && <span style={styles.tabCount}>{transactions.filter(t => isPendingStage(t)).length}</span>}
-                {tab.id === "closed"   && <span style={styles.tabCount}>{transactions.filter(t => isClosedStage(t)).length}</span>}
-                {tab.id === "futureListings" && (isCloud ? (futureListings.length > 0 ? <span style={styles.tabCount}>{futureListings.length}</span> : null) : <FutureListingCountBadge />)}
-                {tab.id === "futureBuyers" && (isCloud ? (futureBuyers.length > 0 ? <span style={styles.tabCount}>{futureBuyers.length}</span> : null) : <FutureBuyerCountBadge />)}
-                {tab.id === "vendors" && (isCloud ? (vendors.length > 0 ? <span style={styles.tabCount}>{vendors.length}</span> : null) : <VendorCountBadge />)}
-              </button>
+              <>
+                <button
+                  onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    width: "100%",
+                    padding: "12px 16px",
+                    background: "var(--paper-soft)",
+                    border: "none",
+                    borderTop: "1px solid var(--ink-line)",
+                    borderBottom: "1px solid var(--ink-line)",
+                    color: "var(--ink)",
+                    cursor: "pointer",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    fontFamily: "var(--font-body)",
+                  }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <currentTab.icon size={16} />
+                    {currentTab.label}
+                    {countBadge(currentTab.id)}
+                  </span>
+                  <Menu size={18} />
+                </button>
+                {mobileMenuOpen && (
+                  <div style={{
+                    position: "fixed",
+                    inset: 0,
+                    background: "rgba(0,0,0,0.5)",
+                    zIndex: 100,
+                  }} onClick={() => setMobileMenuOpen(false)}>
+                    <div style={{
+                      position: "absolute",
+                      top: 0, right: 0, bottom: 0,
+                      width: "min(280px, 80vw)",
+                      background: "var(--paper)",
+                      borderLeft: "1px solid var(--ink-line)",
+                      overflowY: "auto",
+                      boxShadow: "-4px 0 16px rgba(0,0,0,0.15)",
+                    }} onClick={(e) => e.stopPropagation()}>
+                      <div style={{
+                        padding: "16px 18px",
+                        borderBottom: "1px solid var(--ink-line)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}>
+                        <div style={{ fontSize: 12, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Menu</div>
+                        <button onClick={() => setMobileMenuOpen(false)} style={styles.iconBtn}><X size={18} /></button>
+                      </div>
+                      {tabs.map(tab => {
+                        const Icon = tab.icon;
+                        const active = view === tab.id;
+                        return (
+                          <button
+                            key={tab.id}
+                            onClick={() => { setView(tab.id); setMobileMenuOpen(false); }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 12,
+                              width: "100%",
+                              padding: "14px 18px",
+                              background: active ? "var(--paper-soft)" : "transparent",
+                              border: "none",
+                              borderLeft: active ? "3px solid var(--accent)" : "3px solid transparent",
+                              color: active ? "var(--ink)" : "var(--ink-soft)",
+                              cursor: "pointer",
+                              fontSize: 14,
+                              fontWeight: active ? 600 : 400,
+                              fontFamily: "var(--font-body)",
+                              textAlign: "left",
+                            }}>
+                            <Icon size={16} />
+                            <span style={{ flex: 1 }}>{tab.label}</span>
+                            {countBadge(tab.id)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
             );
-          })}
-        </nav>
+          }
+
+          // Desktop: original horizontal tab bar
+          return (
+            <nav style={styles.nav}>
+              {tabs.map(tab => {
+                const Icon = tab.icon;
+                const active = view === tab.id;
+                return (
+                  <button key={tab.id} onClick={() => setView(tab.id)} style={{ ...styles.navTab, ...(active ? styles.navTabActive : {}) }}>
+                    <Icon size={14} />
+                    {tab.label}
+                    {countBadge(tab.id)}
+                  </button>
+                );
+              })}
+            </nav>
+          );
+        })()}
       </header>
 
       <main style={styles.main}>

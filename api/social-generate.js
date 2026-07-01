@@ -1,68 +1,107 @@
 // api/social-generate.js
 // Vercel serverless function for The Jesse Cope Team — Pipeline "Social Media" tab.
 //
-// SETUP (one time):
-//   1. Put this file at the ROOT of your repo as:  api/social-generate.js
-//   2. In Vercel → Project → Settings → Environment Variables, add:
-//        Name:  ANTHROPIC_API_KEY
-//        Value: <your key from console.anthropic.com>
-//      IMPORTANT: do NOT prefix it with VITE_ — that would leak the key to the browser.
-//   3. Redeploy. Done.
+// This version is tuned to match Jesse's ACTUAL posting style:
+// ALL-CAPS headline, emoji line-markers, bulleted feature sections with
+// headers, a price callout, and a "message me / link below" close + hashtags.
 //
-// The React tab calls this at  POST /api/social-generate
+// SETUP is unchanged — you already did it:
+//   - ANTHROPIC_API_KEY is set in Vercel env vars (no VITE_ prefix)
+//   - This file lives at  api/social-generate.js
+// Just replace the old file with this one and commit.
 
 export const config = {
-  api: { bodyParser: { sizeLimit: "10mb" } }, // MLS PDFs are small; headroom just in case
+  api: { bodyParser: { sizeLimit: "10mb" } },
 };
 
-const MODEL = "claude-sonnet-4-6"; // swap the model string here if you ever want to
+const MODEL = "claude-sonnet-4-6";
 
-// --- Jesse's brand voice, baked in so every post sounds like him -------------
+// --- Jesse's brand voice + FORMAT, baked in ---------------------------------
 const VOICE = `
-You write social media posts for The Jesse Cope Team, a real estate team at RE/MAX
-Premier Group in Longview, WA, serving Cowlitz County / SW Washington (Longview,
-Kelso, Castle Rock, Woodland, Toutle, Cathlamet).
+You write Facebook/Instagram posts for The Jesse Cope Team, a real estate team at
+RE/MAX Premier Group in Longview, WA, serving Cowlitz County / SW Washington
+(Longview, Kelso, Castle Rock, Woodland, Toutle, Cathlamet).
 
-VOICE & STYLE:
-- Warm, energetic, buyer-and-seller focused, plainspoken. Talks like a real local, not a corporate account.
-- Leans into the local outdoor identity: hunting, fishing, backpacking, rivers (the Toutle),
-  mountains, elk, the trade-off of small-town living over the big-city commute. Use this
-  flavor naturally — don't force it into every post.
-- Feature lists are semicolon-separated. Uses CAPS for emphasis on key selling points
-  (e.g. NO HOA; RV PARKING; MOVE-IN READY).
-- Short, punchy sentences. A little personality and humor is welcome.
-- Sign longer/value posts as "— The Jesse Cope Team" when it fits. Not every post needs it.
-- End most posts with a light call to action (send a message, let's talk, drop a comment).
-- Add 3-6 relevant hashtags at the end. Always local ones like #CowlitzCounty #SWWashington
-  #LongviewWA #KelsoWA plus topical ones. Never overdo hashtags.
-- One or two tasteful emojis max. Never spammy.
+CRITICAL: These posts must be VISUAL and SCANNABLE — never flat paragraphs.
+Jesse's posts always have an ALL-CAPS headline, emoji markers at the start of
+key lines, bulleted feature sections with little section headers, and a clear
+call to action with hashtags. Match that energy and structure exactly.
 
-HARD RULES (do not break):
-- NEVER invent specific numbers: no made-up mortgage rates, prices, interest rates, days-on-market,
-  appreciation percentages, or market statistics. If a number would strengthen the post, insert a
-  clearly bracketed placeholder like [current rate] or [price] for Jesse to fill in.
-- When a lender is referenced, it's Brandon Nickel, Life Mortgage (NMLS #2042243). Only mention him
-  when relevant.
-- Never make legal, tax, or guaranteed-outcome promises.
-- Output ONLY the post text, ready to copy-paste. No preamble, no explanations, no quotation marks
-  around the whole thing, no "Here's your post:".
+VOICE:
+- Warm, high-energy, enthusiastic, plainspoken. Sounds like a real local, not a corporate account.
+- Uses CAPS for emphasis on headlines and key selling points (PRICE IMPROVEMENT, NEW LISTING, MOTIVATED SELLER, $15K PRICE DROP).
+- Leans into local SW Washington life and the outdoor identity (shops, RV parking, acreage, room to roam, hunting/fishing country) when it fits the property.
+- Excited but never fake — every claim ties to a real detail.
+
+EMOJI:
+- Use emoji as line-markers at the START of key lines, real-estate style:
+  location-pin address, money-bag price, bed beds, bath baths, ruler square footage, house lot/acreage
+  sparkle or key for the "Features you'll love" header, tree for "Outdoor highlights"
+  mobile-phone for the "message me" call to action.
+- One emoji per key line. Tasteful and useful, never a spammy wall of emoji.
+
+HARD RULES:
+- NEVER invent numbers. No made-up prices, square footage, bed/bath counts, mortgage rates, or stats.
+  If a detail isn't provided, leave that line out entirely — do not guess.
+- For the listing link, always end with the placeholder [paste listing link here] on its own line — you never know the real URL.
+- Output ONLY the finished post, ready to copy-paste. No preamble, no "Here's your post:", no quotation marks wrapping it, no explanation.
+`.trim();
+
+// The exact skeleton to follow for a LISTING post.
+const LISTING_SKELETON = `
+Follow this structure (omit any line whose info you don't have — never invent it):
+
+[ALL-CAPS HEADLINE — e.g. "NEW LISTING!" or "PRICE IMPROVEMENT + MOTIVATED SELLER!"]
+(location pin) [Street Address, City, State]
+(money bag) [Price]   -- if it's a price drop, add "— $[X]K PRICE DROP!" in caps
+(bed) [X] Bedrooms | (bath) [X] Bathrooms | (ruler) ~[X] Sq Ft
+
+[1–2 sentence hook that pulls the reader in and captures what's special.]
+
+(sparkle) Features you'll love:
+- [feature]
+- [feature]
+- [feature]
+(4–6 bullets, using a bullet character)
+
+(tree) Outdoor highlights:
+- [feature]
+- [feature]
+(include this section only if there are outdoor/shop/land/parking features)
+
+[One warm closing sentence summing up the appeal.]
+
+(mobile phone) Message me for more details or click the link below for more info and pictures:
+[paste listing link here]
+
+[8–12 relevant hashtags on one line — see hashtag guidance]
+
+Use real emoji (not these text labels) as the line markers, and a real bullet character for list items.
+`.trim();
+
+const HASHTAG_GUIDANCE = `
+Hashtags: always include #TheJesseCopeTeam and #REMAX. Always include local ones:
+#LongviewWA #KelsoWA #CowlitzCounty #SWWashington #WashingtonRealEstate
+#PacificNorthwestRealEstate. Then add topical ones that fit the post, e.g.
+#NewListing #PriceImprovement #HomeForSale #DreamProperty #AcreageProperty
+#ShopSpace #JustListed. Pick 8–12 total for a listing, fewer (4–6) for a non-listing post.
 `.trim();
 
 const POST_TYPE_PROMPTS = {
   lifestyle:
-    "Write a hyperlocal lifestyle post about the appeal of living in Cowlitz County / SW Washington.",
+    "Write a hyperlocal lifestyle post about the appeal of living in Cowlitz County / SW Washington. Give it a short ALL-CAPS or emoji-led hook, a punchy middle (a short bulleted list is welcome), and a call to action to message Jesse. Keep the energy of a listing post even though it's not a listing.",
   first_time_buyer:
-    "Write an encouraging, myth-busting post aimed at first-time home buyers who think they can't afford it or need 20% down. Reassure and invite them to run real numbers.",
+    "Write an encouraging, myth-busting post for first-time buyers who think they can't afford it or need 20% down. Lead with a bold hook, keep it upbeat, use a few bullets if helpful, and end with a call to action to message Jesse / connect with lender Brandon Nickel. Use placeholders in [brackets] for any numbers.",
   myth_buster:
-    "Write a punchy post that busts one common real estate myth (financing, timing, listing, inspections, etc.). Pick a good one.",
+    "Write a punchy myth-buster post that busts one common real estate myth. Bold ALL-CAPS or emoji hook, quick explanation, clear call to action. Never invent stats — use [brackets] if a number would help.",
   seasonal_tip:
-    "Write a practical seasonal home-maintenance or homeowner tip relevant to SW Washington homeowners right now.",
+    "Write a practical seasonal home tip for SW Washington homeowners right now. Give it a bold/emoji hook and a short bulleted checklist, then a friendly call to action.",
   engagement:
-    "Write a short, fun engagement question designed to get comments — tie it to local life, the outdoors, or homeownership.",
+    "Write a short, fun engagement question tied to local life, the outdoors, or homeownership, designed to get comments. Emoji-led, high energy, ends by inviting people to drop a comment.",
   just_listed_teaser:
-    "Write a 'building anticipation' teaser post for an upcoming or fresh listing WITHOUT specific address or price (use placeholders if needed). Make people want to ask for details.",
+    "Write a 'COMING SOON / teaser' post building anticipation for a listing WITHOUT a specific address or price (use placeholders). Bold headline, a few tantalizing emoji-led lines, and a call to action to message Jesse for early details.",
   surprise:
-    "Pick whatever real-estate-related post type you think would perform best today and write it. Vary it up.",
+    "Pick whatever real-estate post type would perform best today and write it in Jesse's high-energy, emoji-led, scannable style with a clear call to action.",
 };
 
 async function callClaude(messages, system) {
@@ -75,7 +114,7 @@ async function callClaude(messages, system) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1024,
+      max_tokens: 1500,
       system,
       messages,
     }),
@@ -114,12 +153,16 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "No listing sheet provided." });
       }
       const instruction = `
-Below is an MLS listing data sheet. Read it and write ONE ready-to-post social media
-post announcing this listing. Pull the real details from the sheet: address (or general
-area if you'd rather tease it), price, beds/baths, square footage, lot size, standout
-features, and any highlights. Lead with what makes it special. Use the semicolon feature
-list style with CAPS on the best selling points. If a detail isn't in the sheet, leave it
-out — do NOT guess. Do not invent any numbers that aren't on the sheet.
+Below is an MLS listing data sheet. Read it and write ONE ready-to-post listing
+post in Jesse's exact style, pulling the real details from the sheet (address,
+price, beds/baths, square footage, lot/acreage, standout interior features,
+and any outdoor/shop/land/parking highlights).
+
+${LISTING_SKELETON}
+
+${HASHTAG_GUIDANCE}
+
+Only include details actually found on the sheet. Do NOT invent anything.
 ${notes ? `\nExtra direction from Jesse: ${notes}` : ""}
 `.trim();
 
@@ -136,12 +179,16 @@ ${notes ? `\nExtra direction from Jesse: ${notes}` : ""}
         },
       ];
     } else {
-      // random / topical post
-      const base =
-        POST_TYPE_PROMPTS[postType] || POST_TYPE_PROMPTS.surprise;
-      const instruction = `${base}${
-        notes ? `\n\nExtra direction from Jesse: ${notes}` : ""
-      }\n\nMake it fresh — assume Jesse posts often, so avoid clichés he's likely used before.`;
+      const base = POST_TYPE_PROMPTS[postType] || POST_TYPE_PROMPTS.surprise;
+      const instruction = `
+${base}
+
+${HASHTAG_GUIDANCE}
+
+Make it fresh — assume Jesse posts often, so avoid clichés he's likely used before.
+Keep it visual and scannable (emoji-led lines, short bullets where useful), never a flat paragraph.
+${notes ? `\nExtra direction from Jesse: ${notes}` : ""}
+`.trim();
 
       messages = [{ role: "user", content: instruction }];
     }

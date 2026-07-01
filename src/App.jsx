@@ -15,7 +15,6 @@ import {
   loadSettings, saveSettings,
   subscribeToTable,
 } from "./supabase";
-import SocialMediaTab from "./SocialMediaTab";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -1415,7 +1414,6 @@ function MainApp({ user }) {
             { id: "closed",         label: "Closed Transactions",  icon: CheckCircle2 },
             { id: "futureBuyers",   label: "Future Buyers",        icon: UserCircle2 },
             { id: "vendors",        label: "Vendors",              icon: Package },
-            { id: "social",         label: "Social Media",         icon: Send },
           ];
 
           // Count badge for a given tab (returns null if no badge)
@@ -1559,8 +1557,6 @@ function MainApp({ user }) {
             onGoToPipeline={() => setView("dashboard")}
             onGoToView={setView}
           />
-        ) : view === "social" ? (
-          <SocialMediaTab />
         ) : view === "todos" ? (
           <TodosTab
             isCloud={isCloud}
@@ -1569,7 +1565,7 @@ function MainApp({ user }) {
             onCloudRemove={async (id) => { await remove("todo_lists", id); }}
           />
         ) : view === "dashboard" ? (
-          <Dashboard stats={stats} transactions={transactions} onOpen={setDetail} />
+          <Dashboard stats={stats} transactions={transactions.filter(t => !isClosedStage(t))} onOpen={setDetail} />
         ) : view === "futureListings" ? (
           <FutureListings
             onConvertToListing={(prefill) => setEditing({ ...newTransaction("listing"), ...prefill })}

@@ -5960,9 +5960,9 @@ function DraftEmailButton({ label, hint, available, onClick }) {
 // DOCUMENT STORAGE — localStorage for local mode, Supabase Storage for cloud
 // ════════════════════════════════════════════════════════════════════════════
 const DOC_BLOB_PREFIX = "jct_doc_blob_";
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per file (cloud) / 4 MB enforced for local
-const MAX_LOCAL_FILE_SIZE = 4 * 1024 * 1024;
-const MAX_TOTAL_DOC_SIZE = 20 * 1024 * 1024; // 20 MB total in local mode
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB per file in cloud (Supabase free tier limit)
+const MAX_LOCAL_FILE_SIZE = 4 * 1024 * 1024; // 4 MB per file when not signed in (browser storage limit)
+const MAX_TOTAL_DOC_SIZE = 20 * 1024 * 1024; // 20 MB total when not signed in
 const STORAGE_BUCKET = "documents";
 
 function fileToBase64(file) {

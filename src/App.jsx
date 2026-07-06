@@ -3033,12 +3033,33 @@ function QuickLaunch({ links, onChange, editing }) {
     if (!newLink.label.trim() || !newLink.url.trim()) return;
     let url = newLink.url.trim();
     if (!/^https?:\/\//i.test(url)) url = "https://" + url;
-    // New links default to favicon mode (auto-fetch the site logo)
-    onChange([...links, { id: newId(), label: newLink.label.trim(), url, icon: newLink.icon || "🔗", iconMode: "favicon", color: "#6b7585" }]);
+    // If the user picked a custom emoji (not the default link icon),
+    // start in emoji mode so their emoji actually shows. If they left the
+    // default 🔗, use favicon mode so the site logo shows automatically.
+    const icon = newLink.icon || "🔗";
+    const iconMode = icon !== "🔗" ? "emoji" : "favicon";
+    onChange([...links, { id: newId(), label: newLink.label.trim(), url, icon, iconMode, color: "#6b7585" }]);
     setNewLink({ label: "", url: "", icon: "🔗" });
   };
   const removeLink = (id) => onChange(links.filter(l => l.id !== id));
-  const toggleIconMode = (id) => onChange(links.map(l => l.id === id ? { ...l, iconMode: l.iconMode === "favicon" ? "emoji" : "favicon" } : l));
+  // Cycles through: favicon → emoji (prompts for new emoji) → favicon
+  const cycleIconMode = (id) => {
+    const link = links.find(l => l.id === id);
+    if (!link) return;
+    if (link.iconMode === "favicon") {
+      // Switch to emoji mode with current emoji
+      onChange(links.map(l => l.id === id ? { ...l, iconMode: "emoji" } : l));
+    } else {
+      // Already in emoji mode — prompt for new emoji, or switch back to favicon on cancel
+      const newEmoji = prompt("Enter an emoji (or leave blank to switch back to website logo):", link.icon || "🔗");
+      if (newEmoji === null) return; // cancel
+      if (newEmoji.trim() === "") {
+        onChange(links.map(l => l.id === id ? { ...l, iconMode: "favicon" } : l));
+      } else {
+        onChange(links.map(l => l.id === id ? { ...l, icon: newEmoji, iconMode: "emoji" } : l));
+      }
+    }
+  };
 
   const handleDragStart = (i) => setDraggedIdx(i);
   const handleDragOver = (e, i) => {
@@ -3093,11 +3114,11 @@ function QuickLaunch({ links, onChange, editing }) {
             {editing && (
               <>
                 <button
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleIconMode(l.id); }}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); cycleIconMode(l.id); }}
                   onMouseDown={(e) => e.stopPropagation()}
                   draggable={false}
                   style={styles.linkIconToggleBtn}
-                  title={l.iconMode === "favicon" ? "Switch to emoji" : "Switch to website logo"}>
+                  title={l.iconMode === "favicon" ? "Switch to emoji" : "Change emoji or switch to website logo"}>
                   {l.iconMode === "favicon" ? "😀" : "🌐"}
                 </button>
                 <button
@@ -3114,9 +3135,10 @@ function QuickLaunch({ links, onChange, editing }) {
       </div>
       {editing && (
         <div style={styles.linkAddRow}>
-          <input type="text" placeholder="Icon"
+          <input type="text" placeholder="🔗"
             value={newLink.icon} onChange={(e) => setNewLink({ ...newLink, icon: e.target.value })}
-            style={{ ...styles.input, padding: "7px 10px", fontSize: 14, width: 50, textAlign: "center" }} maxLength={2} />
+            style={{ ...styles.input, padding: "7px 10px", fontSize: 18, width: 54, textAlign: "center" }}
+            maxLength={8} title="Tap here and use your keyboard's emoji picker" />
           <input type="text" placeholder="Label (e.g. Zillow)"
             value={newLink.label} onChange={(e) => setNewLink({ ...newLink, label: e.target.value })}
             style={{ ...styles.input, padding: "7px 10px", fontSize: 13, flex: 1, minWidth: 100 }} />

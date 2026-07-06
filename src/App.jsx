@@ -30,6 +30,8 @@ const PENDING_PHASE_MILESTONES = [
   { id: "mutualAcceptance",     label: "Mutual Acceptance" },
   { id: "earnestMoney",         label: "Earnest Money Deposit" },
   { id: "inspection",           label: "Inspection Contingency" },
+  { id: "septicInspection",     label: "Septic Inspection" },
+  { id: "wellInspection",       label: "Well Inspection" },
   { id: "inspectionResponse",   label: "Inspection Response" },
   { id: "titleReview",          label: "Title Contingency" },
   { id: "appraisal",            label: "Appraisal" },
@@ -555,17 +557,10 @@ function applyPurchaseContract(form, x) {
     setMilestone("finalWalkthrough", walkthrough);
   }
 
-  // Add custom inspections if found
-  const addCustom = (label, date) => {
-    if (!date) return;
-    const exists = merged.milestones.find(m => m.label.toLowerCase() === label.toLowerCase());
-    if (exists) { exists.date = date; return; }
-    merged.milestones.push({
-      id: newId(), label, date, complete: false, notes: "", custom: true,
-    });
-  };
-  if (x.wellInspectionDate)   addCustom("Well Inspection", x.wellInspectionDate);
-  if (x.septicInspectionDate) addCustom("Septic Inspection", x.septicInspectionDate);
+  // Set standard septic/well inspection milestones if the AI found them.
+  // These are now part of the default timeline, so no need to add as custom.
+  if (x.wellInspectionDate)   setMilestone("wellInspection", x.wellInspectionDate);
+  if (x.septicInspectionDate) setMilestone("septicInspection", x.septicInspectionDate);
 
   // Going from listing → pending: bump status if we just got a purchase contract
   // and the deal was previously just an active listing.
@@ -746,14 +741,28 @@ function migrateV1(old) {
 // newly-added standard milestones without losing user customizations.
 function ensureTxnSchema(t) {
   const base = newTransaction(t.type || "listing");
+  const existingMilestones = t.milestones || [];
+
+  // Build the standard milestone list, merging existing data by id.
+  // If a NEW standard milestone (like septic/well) has a matching custom
+  // one by label (from a prior AI parse), copy that custom's data over
+  // and mark the custom for removal.
+  const customIdsToRemove = new Set();
   const baseStandards = base.milestones.map(bm => {
-    const existing = (t.milestones || []).find(em => em.id === bm.id);
-    return existing
-      ? { ...bm, ...existing, reminderDays: existing.reminderDays ?? DEFAULT_REMINDER_DAYS }
-      : bm;
+    const byId = existingMilestones.find(em => em.id === bm.id);
+    if (byId) {
+      return { ...bm, ...byId, reminderDays: byId.reminderDays ?? DEFAULT_REMINDER_DAYS };
+    }
+    // Try to find a legacy custom milestone matching by label
+    const byLabel = existingMilestones.find(em => em.custom && em.label.toLowerCase() === bm.label.toLowerCase());
+    if (byLabel) {
+      customIdsToRemove.add(byLabel.id);
+      return { ...bm, date: byLabel.date || "", complete: !!byLabel.complete, notes: byLabel.notes || "", reminderDays: byLabel.reminderDays ?? DEFAULT_REMINDER_DAYS };
+    }
+    return bm;
   });
-  const customs = (t.milestones || [])
-    .filter(em => em.custom)
+  const customs = existingMilestones
+    .filter(em => em.custom && !customIdsToRemove.has(em.id))
     .map(em => ({ ...em, reminderDays: em.reminderDays ?? DEFAULT_REMINDER_DAYS }));
   if (t.listDate) {
     const listMs = baseStandards.find(m => m.id === "listDate");

@@ -3074,23 +3074,30 @@ function QuickLaunch({ links, onChange, editing }) {
   const handleDragEnd = () => setDraggedIdx(null);
 
   // Render a tile's icon — favicon image if iconMode is "favicon" and it hasn't failed,
-  // otherwise the emoji.
+  // otherwise the emoji. Both render into a same-sized 32x32 box so they line up
+  // visually across tiles regardless of type.
   const renderIcon = (l) => {
+    const box = {
+      width: 32, height: 32,
+      display: "flex", alignItems: "center", justifyContent: "center",
+    };
     if (l.iconMode === "favicon" && !faviconFailed[l.id]) {
       const fav = faviconUrl(l.url);
       if (fav) {
         return (
-          <img
-            src={fav}
-            alt=""
-            width={28} height={28}
-            onError={() => setFaviconFailed(s => ({ ...s, [l.id]: true }))}
-            style={{ objectFit: "contain", borderRadius: 6 }}
-          />
+          <div style={box}>
+            <img
+              src={fav}
+              alt=""
+              width={28} height={28}
+              onError={() => setFaviconFailed(s => ({ ...s, [l.id]: true }))}
+              style={{ objectFit: "contain", borderRadius: 6 }}
+            />
+          </div>
         );
       }
     }
-    return <div style={{ fontSize: 26 }}>{l.icon || "🔗"}</div>;
+    return <div style={{ ...box, fontSize: 28, lineHeight: 1 }}>{l.icon || "🔗"}</div>;
   };
 
   return (

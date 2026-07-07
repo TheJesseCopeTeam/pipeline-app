@@ -692,6 +692,9 @@ function newTransaction(type) {
     milestones: milestonesForType(type).map(m => ({
       id: m.id, label: m.label, date: "", complete: false, notes: "",
       custom: false, reminderDays: DEFAULT_REMINDER_DAYS,
+      informational: !!m.informational,
+      noDate: !!m.noDate,
+      hint: m.hint || "",
     })),
     contacts: {
       listingBroker: { name: "", company: "", phone: "", email: "" },
@@ -3293,7 +3296,16 @@ function Dashboard({ stats, transactions, onOpen }) {
       <section style={{ marginTop: 40 }}>
         <h2 style={styles.sectionTitle}>All Transactions</h2>
         <div style={styles.cardGrid}>
-          {transactions.slice().reverse().map(t => <TransactionCard key={t.id} txn={t} onClick={() => onOpen(t)} />)}
+          {(() => {
+            // Sort: pending stage first, then active. Within each group, alphabetical by address.
+            const sorted = transactions.slice().sort((a, b) => {
+              const aPending = isPendingStage(a) ? 0 : 1;
+              const bPending = isPendingStage(b) ? 0 : 1;
+              if (aPending !== bPending) return aPending - bPending;
+              return (a.address || "").localeCompare(b.address || "");
+            });
+            return sorted.map(t => <TransactionCard key={t.id} txn={t} onClick={() => onOpen(t)} />);
+          })()}
         </div>
       </section>
     </>
@@ -3314,12 +3326,14 @@ function StatCard({ label, value, accent }) {
 // ════════════════════════════════════════════════════════════════════════════
 function TransactionCard({ txn, onClick }) {
   const status = STATUS_OPTIONS.find(s => s.value === txn.status) || STATUS_OPTIONS[0];
-  const completedCount = txn.milestones.filter(m => m.complete).length;
-  const totalCount = txn.milestones.length;
+  // Only count real tasks (not informational date references) for progress
+  const taskMilestones = txn.milestones.filter(m => !m.informational);
+  const completedCount = taskMilestones.filter(m => m.complete).length;
+  const totalCount = taskMilestones.length;
   const progressPct = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
   const nextMilestone = txn.milestones
-    .filter(m => m.date && !m.complete)
+    .filter(m => m.date && !m.complete && !m.informational)
     .sort((a, b) => a.date.localeCompare(b.date))[0];
 
   const partyLabel = txn.sellerName || txn.buyerName
@@ -3359,6 +3373,17 @@ function TransactionCard({ txn, onClick }) {
           <span style={{ fontWeight: 500 }}>{fmtDateShort(txn.closingDate)}</span>
         </div>
       )}
+      {txn.type === "listing" && (() => {
+        // Show listing expiration date from the informational milestone
+        const expMs = (txn.milestones || []).find(m => m.id === "expirationDate");
+        if (!expMs || !expMs.date) return null;
+        return (
+          <div style={styles.cardRow}>
+            <span style={{ color: "var(--ink-soft)" }}>Expires</span>
+            <span style={{ fontWeight: 500 }}>{fmtDateShort(expMs.date)}</span>
+          </div>
+        );
+      })()}
 
       <div style={{ marginTop: 14 }}>
         <div style={styles.progressTrack}>

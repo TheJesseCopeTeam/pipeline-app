@@ -19,21 +19,25 @@ import {
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────────────────
-// Listing-phase milestones (only present on listing-type transactions)
+// Milestones with `informational: true` are date references, not tasks
+// (no complete checkbox, no reminder — they just record when something happened).
+// Milestones with `noDate: true` don't have a date field (used for tasks
+// where the date can't be predicted, like Title Contingency).
+// `hint` is optional helper text shown near the field.
 const LISTING_PHASE_MILESTONES = [
-  { id: "listDate",       label: "Listing Date" },
-  { id: "expirationDate", label: "Listing Expiration" },
+  { id: "listDate",       label: "Listing Date",       informational: true },
+  { id: "expirationDate", label: "Listing Expiration", informational: true },
 ];
 
-// Pending-phase milestones (apply to both listings under contract and buyer deals)
 const PENDING_PHASE_MILESTONES = [
-  { id: "mutualAcceptance",     label: "Mutual Acceptance" },
+  { id: "mutualAcceptance",     label: "Mutual Acceptance",     informational: true },
   { id: "earnestMoney",         label: "Earnest Money Deposit" },
   { id: "inspection",           label: "Inspection Contingency" },
   { id: "septicInspection",     label: "Septic Inspection" },
   { id: "wellInspection",       label: "Well Inspection" },
   { id: "inspectionResponse",   label: "Inspection Response" },
-  { id: "titleReview",          label: "Title Contingency" },
+  { id: "titleReview",          label: "Title Contingency", noDate: true,
+    hint: "5 days after receiving title commitment" },
   { id: "appraisal",            label: "Appraisal" },
   { id: "financingContingency", label: "Financing Contingency" },
   { id: "noticeToPerform",      label: "Notice to Perform" },
@@ -340,7 +344,8 @@ Return ONLY a valid JSON object — no markdown, no code fences, no preamble. Us
   "closingDate": "YYYY-MM-DD",
   "earnestMoneyDueDate": "YYYY-MM-DD if a specific date is given",
   "earnestMoneyDays": "Integer days from mutual acceptance, if a period is given instead of a date",
-  "noticeToPerformDate": "YYYY-MM-DD if specified",
+  "noticeToPerformDate": "YYYY-MM-DD if a specific date is given",
+  "noticeToPerformDays": "Integer days from mutual acceptance if a period is given (e.g. '3 days after mutual acceptance')",
 
   "inspectionDate": "YYYY-MM-DD if a specific date is given for inspection contingency end",
   "inspectionDays": "Integer days from mutual acceptance for inspection contingency, if a period is given",
@@ -545,6 +550,7 @@ function applyPurchaseContract(form, x) {
   if (base && x.financingContingencyDays != null) setMilestone("financingContingency", computeDeadline(base, x.financingContingencyDays));
 
   if (x.noticeToPerformDate) setMilestone("noticeToPerform", x.noticeToPerformDate);
+  else if (base && x.noticeToPerformDays != null) setMilestone("noticeToPerform", computeDeadline(base, x.noticeToPerformDays));
 
   if (close) {
     const wt = x.finalWalkthroughDaysBeforeClose;
@@ -6910,11 +6916,18 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
             <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 10 }}>
               {form.milestones.map(m => (
                 <div key={m.id} style={styles.milestoneRowEdit}>
-                  <button type="button" onClick={() => updateMilestone(m.id, "complete", !m.complete)} style={styles.checkBtn}>
-                    {m.complete
-                      ? <CheckCircle2 size={18} style={{ color: "var(--accent)" }} />
-                      : <Circle size={18} style={{ color: "var(--ink-soft)" }} />}
-                  </button>
+                  {m.informational ? (
+                    // Informational milestones are dates only — no checkbox
+                    <div style={{ width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ink-soft)", fontSize: 14 }}>
+                      📅
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => updateMilestone(m.id, "complete", !m.complete)} style={styles.checkBtn}>
+                      {m.complete
+                        ? <CheckCircle2 size={18} style={{ color: "var(--accent)" }} />
+                        : <Circle size={18} style={{ color: "var(--ink-soft)" }} />}
+                    </button>
+                  )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {m.custom ? (
                       <input type="text" value={m.label}
@@ -6923,6 +6936,11 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
                     ) : (
                       <div style={{ fontWeight: 500, fontSize: 14, color: m.complete ? "var(--ink-soft)" : "var(--ink)" }}>
                         {m.label}
+                        {m.hint && (
+                          <span style={{ marginLeft: 8, fontSize: 11, color: "var(--ink-soft)", fontStyle: "italic", fontWeight: 400 }}>
+                            {m.hint}
+                          </span>
+                        )}
                       </div>
                     )}
                     <input type="text" placeholder="Notes (optional)" value={m.notes || ""}
@@ -6930,17 +6948,21 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
                       style={{ ...styles.input, padding: "5px 8px", fontSize: 12, marginTop: 4, color: "var(--ink-soft)" }} />
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
-                    <input type="date" value={m.date}
-                      onChange={(e) => updateMilestone(m.id, "date", e.target.value)}
-                      style={{ ...styles.input, width: 150 }} />
-                    <div style={styles.reminderInline} title="How many days before this date to remind you (on dashboard + calendar)">
-                      <Bell size={11} style={{ color: "var(--ink-soft)" }} />
-                      <input type="number" min="0" max="60"
-                        value={m.reminderDays ?? DEFAULT_REMINDER_DAYS}
-                        onChange={(e) => updateMilestone(m.id, "reminderDays", e.target.value === "" ? "" : parseInt(e.target.value, 10))}
-                        style={styles.reminderInput} />
-                      <span>d before</span>
-                    </div>
+                    {!m.noDate && (
+                      <input type="date" value={m.date}
+                        onChange={(e) => updateMilestone(m.id, "date", e.target.value)}
+                        style={{ ...styles.input, width: 150 }} />
+                    )}
+                    {!m.informational && !m.noDate && (
+                      <div style={styles.reminderInline} title="How many days before this date to remind you">
+                        <Bell size={11} style={{ color: "var(--ink-soft)" }} />
+                        <input type="number" min="0" max="60"
+                          value={m.reminderDays ?? DEFAULT_REMINDER_DAYS}
+                          onChange={(e) => updateMilestone(m.id, "reminderDays", e.target.value === "" ? "" : parseInt(e.target.value, 10))}
+                          style={styles.reminderInput} />
+                        <span>d before</span>
+                      </div>
+                    )}
                   </div>
                   <button type="button" onClick={() => removeMilestone(m.id)}
                     style={{ ...styles.iconBtn, padding: 6 }}
@@ -7307,23 +7329,34 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {txn.milestones.map(m => {
                 const days = daysUntil(m.date);
-                const upcoming = !m.complete && m.date && days !== null;
+                const upcoming = !m.complete && !m.informational && m.date && days !== null;
                 return (
                   <div key={m.id} style={styles.milestoneRow}>
-                    <button onClick={() => toggleMilestone(m.id)} style={styles.checkBtn}>
-                      {m.complete
-                        ? <CheckCircle2 size={18} style={{ color: "var(--accent)" }} />
-                        : <Circle size={18} style={{ color: "var(--ink-soft)" }} />}
-                    </button>
+                    {m.informational ? (
+                      <div style={{ width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ink-soft)", fontSize: 14 }}>
+                        📅
+                      </div>
+                    ) : (
+                      <button onClick={() => toggleMilestone(m.id)} style={styles.checkBtn}>
+                        {m.complete
+                          ? <CheckCircle2 size={18} style={{ color: "var(--accent)" }} />
+                          : <Circle size={18} style={{ color: "var(--ink-soft)" }} />}
+                      </button>
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 14, fontWeight: 500, color: m.complete ? "var(--ink-soft)" : "var(--ink)" }}>
                         {m.label}
                         {m.custom && <span style={styles.customTag}>custom</span>}
+                        {m.hint && (
+                          <span style={{ marginLeft: 8, fontSize: 11, color: "var(--ink-soft)", fontStyle: "italic", fontWeight: 400 }}>
+                            {m.hint}
+                          </span>
+                        )}
                       </div>
                       {m.notes && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2 }}>{m.notes}</div>}
                     </div>
                     <div style={{ fontSize: 13, color: "var(--ink-soft)", fontVariantNumeric: "tabular-nums", minWidth: 130, textAlign: "right" }}>
-                      {fmtDate(m.date)}
+                      {m.noDate ? "—" : fmtDate(m.date)}
                       {upcoming && (() => {
                         const lead = m.reminderDays ?? DEFAULT_REMINDER_DAYS;
                         return (

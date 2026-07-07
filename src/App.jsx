@@ -35,7 +35,8 @@ const PENDING_PHASE_MILESTONES = [
   { id: "inspection",           label: "Inspection Contingency" },
   { id: "septicInspection",     label: "Septic Inspection" },
   { id: "wellInspection",       label: "Well Inspection" },
-  { id: "inspectionResponse",   label: "Inspection Response" },
+  { id: "inspectionResponse",   label: "Inspection Response", noDate: true,
+    hint: "Can be submitted any time within the inspection contingency period" },
   { id: "titleReview",          label: "Title Contingency", noDate: true,
     hint: "5 days after receiving title commitment" },
   { id: "appraisal",            label: "Appraisal" },
@@ -349,7 +350,6 @@ Return ONLY a valid JSON object — no markdown, no code fences, no preamble. Us
 
   "inspectionDate": "YYYY-MM-DD if a specific date is given for inspection contingency end",
   "inspectionDays": "Integer days from mutual acceptance for inspection contingency, if a period is given",
-  "inspectionResponseDays": "Integer days for buyer's response after inspection",
   "titleReviewDays": "Integer days for title review period",
   "appraisalDays": "Integer days for appraisal contingency",
   "financingContingencyDays": "Integer days for financing contingency",
@@ -544,7 +544,8 @@ function applyPurchaseContract(form, x) {
   if (x.inspectionDate) setMilestone("inspection", x.inspectionDate);
   else if (base && x.inspectionDays != null) setMilestone("inspection", computeDeadline(base, x.inspectionDays));
 
-  if (base && x.inspectionResponseDays != null) setMilestone("inspectionResponse", computeDeadline(base, x.inspectionResponseDays));
+  // Inspection Response has no fixed date (can happen any time within
+  // the inspection contingency), so we don't compute or store one.
   if (base && x.titleReviewDays != null)        setMilestone("titleReview", computeDeadline(base, x.titleReviewDays));
   if (base && x.appraisalDays != null)          setMilestone("appraisal", computeDeadline(base, x.appraisalDays));
   if (base && x.financingContingencyDays != null) setMilestone("financingContingency", computeDeadline(base, x.financingContingencyDays));

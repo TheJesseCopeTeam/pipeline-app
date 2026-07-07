@@ -13,6 +13,7 @@ const SAFE_PORTAL_FIELDS = [
   "contractDate", "closingDate", "financingType",
   "milestones", "documents", "clientPortal",
   "sellerName", "buyerName",
+  "contacts", // includes listing broker, selling broker, escrow, lender
 ];
 
 // Fields we strip out before sending to the client portal

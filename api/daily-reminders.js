@@ -54,15 +54,13 @@ async function fetchTable(supabaseUrl, key, table) {
 
 function buildDigest(rows) {
   const today = todayISO();
-  const in3Days = isoOffset(3);
+  const in14Days = isoOffset(14);
   const overdue = [];
-  const dueToday = [];
-  const comingUp = [];
+  const upcoming = []; // Next 14 days including today
 
   const bucket = (dueDate, item) => {
     if (dueDate < today) overdue.push(item);
-    else if (dueDate === today) dueToday.push(item);
-    else if (dueDate <= in3Days) comingUp.push(item);
+    else if (dueDate <= in14Days) upcoming.push(item);
   };
 
   // Transactions & milestones
@@ -73,6 +71,9 @@ function buildDigest(rows) {
     const addr = t.address || "(no address)";
     for (const m of t.milestones) {
       if (m.complete || !m.date) continue;
+      // Informational milestones (Mutual Acceptance, Listing Date, etc.) are
+      // date references, not tasks — never include them in the digest.
+      if (m.informational) continue;
       bucket(m.date, {
         type: "milestone",
         label: m.label,
@@ -88,15 +89,20 @@ function buildDigest(rows) {
     if (!list || !Array.isArray(list.items)) continue;
     for (const item of list.items) {
       if (item.done) continue;
+      if (!item.reminderType || item.reminderType === "none") continue;
+
       let dueDate = null;
       if (item.reminderType === "date" && item.reminderDate) {
         dueDate = item.reminderDate;
-      } else if (item.reminderType === "frequency" && item.lastReminded && item.frequencyDays) {
-        const last = new Date(item.lastReminded + "T00:00:00");
-        last.setDate(last.getDate() + Number(item.frequencyDays));
-        const y = last.getFullYear();
-        const mo = String(last.getMonth() + 1).padStart(2, "0");
-        const d = String(last.getDate()).padStart(2, "0");
+      } else if (item.reminderType === "frequency" && item.reminderDays > 0) {
+        // Base is when it was last acknowledged, or when it was created if never
+        const base = item.lastReminded ||
+          (item.createdAt ? String(item.createdAt).split("T")[0] : todayISO());
+        const baseDate = new Date(base + "T00:00:00");
+        baseDate.setDate(baseDate.getDate() + Number(item.reminderDays));
+        const y = baseDate.getFullYear();
+        const mo = String(baseDate.getMonth() + 1).padStart(2, "0");
+        const d = String(baseDate.getDate()).padStart(2, "0");
         dueDate = y + "-" + mo + "-" + d;
       }
       if (!dueDate) continue;

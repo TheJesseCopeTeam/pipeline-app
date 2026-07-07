@@ -4693,7 +4693,16 @@ function TodosTab({ isCloud, cloudItems, onCloudSave, onCloudRemove }) {
   // In cloud mode, the source of truth is the cloudItems prop (kept in sync
   // by the parent via realtime subscription). In local mode, we manage our
   // own state and persist to localStorage.
-  const lists = isCloud ? (cloudItems || []) : localLists;
+  // Sort lists by their sortOrder (falls back to createdAt for legacy lists
+  // without sortOrder, ensuring stable predictable ordering).
+  const listsRaw = isCloud ? (cloudItems || []) : localLists;
+  const lists = useMemo(() => {
+    return listsRaw.slice().sort((a, b) => {
+      const aOrder = a.sortOrder ?? new Date(a.createdAt || 0).getTime();
+      const bOrder = b.sortOrder ?? new Date(b.createdAt || 0).getTime();
+      return aOrder - bOrder;
+    });
+  }, [listsRaw]);
 
   useEffect(() => {
     if (isCloud) { setLoaded(true); return; }
@@ -4728,9 +4737,45 @@ function TodosTab({ isCloud, cloudItems, onCloudSave, onCloudRemove }) {
   const addList = async () => {
     const name = newListName.trim();
     if (!name) return;
-    const newList = { id: newId(), name, createdAt: new Date().toISOString(), items: [] };
+    // New lists get the highest sortOrder so they appear at the bottom
+    const maxOrder = lists.reduce((max, l) => Math.max(max, l.sortOrder ?? 0), 0);
+    const newList = {
+      id: newId(), name, createdAt: new Date().toISOString(),
+      items: [], sortOrder: maxOrder + 1,
+    };
     await saveList(newList);
     setNewListName("");
+  };
+
+  // Move a list up or down in the display order by swapping sortOrder with
+  // the neighboring list. Direction: -1 = up, +1 = down.
+  const moveList = async (id, direction) => {
+    const idx = lists.findIndex(l => l.id === id);
+    if (idx === -1) return;
+    const swapIdx = idx + direction;
+    if (swapIdx < 0 || swapIdx >= lists.length) return;
+    const listA = lists[idx];
+    const listB = lists[swapIdx];
+    const orderA = listA.sortOrder ?? new Date(listA.createdAt || 0).getTime();
+    const orderB = listB.sortOrder ?? new Date(listB.createdAt || 0).getTime();
+    await saveList({ ...listA, sortOrder: orderB });
+    await saveList({ ...listB, sortOrder: orderA });
+  };
+
+  // Move a to-do item from one list to another
+  const moveItem = async (itemId, fromListId, toListId) => {
+    if (fromListId === toListId) return;
+    const fromList = lists.find(l => l.id === fromListId);
+    const toList = lists.find(l => l.id === toListId);
+    if (!fromList || !toList) return;
+    const item = (fromList.items || []).find(i => i.id === itemId);
+    if (!item) return;
+    // Remove from source
+    const updatedFrom = { ...fromList, items: (fromList.items || []).filter(i => i.id !== itemId) };
+    // Add to destination
+    const updatedTo = { ...toList, items: [...(toList.items || []), item] };
+    await saveList(updatedFrom);
+    await saveList(updatedTo);
   };
 
   const removeList = async (id) => {
@@ -4789,13 +4834,19 @@ function TodosTab({ isCloud, cloudItems, onCloudSave, onCloudRemove }) {
         </button>
       </div>
 
-      {lists.map(list => (
+      {lists.map((list, idx) => (
         <TodoListBlock
           key={list.id}
           list={list}
+          allLists={lists}
+          isFirst={idx === 0}
+          isLast={idx === lists.length - 1}
           onUpdate={(updates) => updateList(list.id, updates)}
           onRemove={() => removeList(list.id)}
           onRename={() => renameList(list.id)}
+          onMoveUp={() => moveList(list.id, -1)}
+          onMoveDown={() => moveList(list.id, +1)}
+          onMoveItem={(itemId, toListId) => moveItem(itemId, list.id, toListId)}
         />
       ))}
 
@@ -4809,9 +4860,10 @@ function TodosTab({ isCloud, cloudItems, onCloudSave, onCloudRemove }) {
   );
 }
 
-function TodoListBlock({ list, onUpdate, onRemove, onRename }) {
+function TodoListBlock({ list, allLists, isFirst, isLast, onUpdate, onRemove, onRename, onMoveUp, onMoveDown, onMoveItem }) {
   const [newItemText, setNewItemText] = useState("");
   const [editingReminder, setEditingReminder] = useState(null); // item id or null
+  const [movingItemId, setMovingItemId] = useState(null); // item id or null
 
   const addItem = () => {
     const text = newItemText.trim();
@@ -4851,6 +4903,8 @@ function TodoListBlock({ list, onUpdate, onRemove, onRename }) {
 
   const activeItems = (list.items || []).filter(i => !i.complete);
   const doneItems = (list.items || []).filter(i => i.complete);
+  // Other lists to move items to (excludes this list)
+  const otherLists = (allLists || []).filter(l => l.id !== list.id);
 
   return (
     <div style={{ background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12, padding: 18, marginBottom: 16 }}>
@@ -4862,6 +4916,16 @@ function TodoListBlock({ list, onUpdate, onRemove, onRename }) {
           </span>
         </h2>
         <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={onMoveUp} disabled={isFirst}
+            style={{ background: "transparent", border: "none", color: isFirst ? "var(--ink-line)" : "var(--ink-soft)", padding: 6, cursor: isFirst ? "not-allowed" : "pointer" }}
+            title="Move list up">
+            ▲
+          </button>
+          <button onClick={onMoveDown} disabled={isLast}
+            style={{ background: "transparent", border: "none", color: isLast ? "var(--ink-line)" : "var(--ink-soft)", padding: 6, cursor: isLast ? "not-allowed" : "pointer" }}
+            title="Move list down">
+            ▼
+          </button>
           <button onClick={onRename} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 6, cursor: "pointer" }} title="Rename list">
             <Edit3 size={14} />
           </button>
@@ -4873,16 +4937,52 @@ function TodoListBlock({ list, onUpdate, onRemove, onRename }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
         {activeItems.map(item => (
-          <TodoItem
-            key={item.id}
-            item={item}
-            onToggle={() => toggleComplete(item.id)}
-            onEdit={() => editItemText(item.id)}
-            onRemove={() => removeItem(item.id)}
-            onSetReminder={(updates) => updateItem(item.id, updates)}
-            reminderOpen={editingReminder === item.id}
-            onToggleReminder={() => setEditingReminder(editingReminder === item.id ? null : item.id)}
-          />
+          <div key={item.id}>
+            <TodoItem
+              item={item}
+              onToggle={() => toggleComplete(item.id)}
+              onEdit={() => editItemText(item.id)}
+              onRemove={() => removeItem(item.id)}
+              onSetReminder={(updates) => updateItem(item.id, updates)}
+              reminderOpen={editingReminder === item.id}
+              onToggleReminder={() => setEditingReminder(editingReminder === item.id ? null : item.id)}
+              canMove={otherLists.length > 0}
+              onMoveClick={() => setMovingItemId(movingItemId === item.id ? null : item.id)}
+            />
+            {movingItemId === item.id && otherLists.length > 0 && (
+              <div style={{
+                marginLeft: 40, marginTop: 4, marginBottom: 4, padding: 8,
+                background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8
+              }}>
+                <div style={{ fontSize: 11, color: "var(--ink-soft)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  Move to list
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {otherLists.map(l => (
+                    <button
+                      key={l.id}
+                      onClick={() => { onMoveItem(item.id, l.id); setMovingItemId(null); }}
+                      style={{
+                        fontSize: 12, padding: "4px 10px", borderRadius: 4,
+                        border: "1px solid var(--ink-line)", background: "var(--paper)",
+                        color: "var(--ink)", cursor: "pointer",
+                      }}>
+                      {l.name}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setMovingItemId(null)}
+                    style={{
+                      fontSize: 12, padding: "4px 10px", borderRadius: 4,
+                      border: "none", background: "transparent",
+                      color: "var(--ink-soft)", cursor: "pointer",
+                    }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         ))}
       </div>
 
@@ -4925,7 +5025,7 @@ function TodoListBlock({ list, onUpdate, onRemove, onRename }) {
   );
 }
 
-function TodoItem({ item, onToggle, onEdit, onRemove, onSetReminder, reminderOpen, onToggleReminder }) {
+function TodoItem({ item, onToggle, onEdit, onRemove, onSetReminder, reminderOpen, onToggleReminder, canMove, onMoveClick }) {
   const status = todoReminderStatus(item);
 
   return (
@@ -4952,6 +5052,11 @@ function TodoItem({ item, onToggle, onEdit, onRemove, onSetReminder, reminderOpe
         <button onClick={onToggleReminder} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Set reminder">
           <Bell size={13} />
         </button>
+        {canMove && (
+          <button onClick={onMoveClick} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer", fontSize: 13 }} title="Move to another list">
+            ↔
+          </button>
+        )}
         <button onClick={onRemove} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Delete">
           <X size={13} />
         </button>

@@ -1340,6 +1340,10 @@ function MainApp({ user }) {
         (t.city || "").toLowerCase().includes(q)
       );
     }
+    // Sort alphabetically by address for the transaction tabs
+    if (view === "listings" || view === "buyers" || view === "closed") {
+      list = list.slice().sort((a, b) => (a.address || "").localeCompare(b.address || ""));
+    }
     return list;
   }, [transactions, view, search]);
 
@@ -3766,8 +3770,8 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
     }
     setEditing(null);
   };
-  const convertToListing = (item) => {
-    if (!confirm("Convert this to an active Listing Transaction? It'll stay in Future Listings until you remove it.")) return;
+  const convertToListing = async (item) => {
+    if (!confirm("Convert this to an Active Transaction? The card will be removed from Future Listings and moved to Active Transactions.")) return;
 
     // Pack any property details into the converted listing's notes so the info
     // isn't lost. Property detail fields live only on Future Listings.
@@ -3783,6 +3787,22 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
     const oldNotesLine = item.notes ? `\n\nFrom Future Listings: ${item.notes}` : "";
     const detailsLine = detailLines.length ? `\n\nProperty details:\n${detailLines.join("\n")}` : "";
     const combinedNotes = (detailsLine + oldNotesLine).trim();
+
+    // Remove the future listing entry — the info is being transferred, not copied
+    try {
+      if (isCloud) {
+        await onCloudRemove(item.id);
+      } else {
+        setLocalItems(prev => {
+          const next = prev.filter(i => i.id !== item.id);
+          try { localStorage.setItem(FUTURE_LISTINGS_KEY, JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+      }
+    } catch (e) {
+      console.error("Couldn't remove future listing:", e);
+    }
+    setEditing(null);
 
     onConvertToListing({
       address: item.address, city: item.city, state: item.state, zip: item.zip,
@@ -4089,8 +4109,25 @@ function FutureBuyers({ onConvertToBuyer, cloudItems, onCloudSave, onCloudRemove
     }
     setEditing(null);
   };
-  const convertToBuyer = (item) => {
-    if (!confirm("Convert this to an active Selling Transaction? Their info will pre-fill the buyer side.")) return;
+  const convertToBuyer = async (item) => {
+    if (!confirm("Convert this to an Active Transaction? The card will be removed from Future Buyers and moved to Active Transactions.")) return;
+
+    // Remove the future buyer entry — the info is being transferred, not copied
+    try {
+      if (isCloud) {
+        await onCloudRemove(item.id);
+      } else {
+        setLocalItems(prev => {
+          const next = prev.filter(i => i.id !== item.id);
+          try { localStorage.setItem(FUTURE_BUYERS_KEY, JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+      }
+    } catch (e) {
+      console.error("Couldn't remove future buyer:", e);
+    }
+    setEditing(null);
+
     onConvertToBuyer({
       buyerName: item.name,
       buyerPhone: item.phone,

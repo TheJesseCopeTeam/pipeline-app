@@ -7848,14 +7848,10 @@ function ClientPortalView({ token }) {
 
   const txn = state.txn;
   const portal = txn.clientPortal || {};
-  const sortedMs = (txn.milestones || [])
-    .slice()
-    .sort((a, b) => {
-      if (!a.date && !b.date) return 0;
-      if (!a.date) return 1;
-      if (!b.date) return -1;
-      return a.date < b.date ? -1 : 1;
-    });
+  // Preserve the original milestone order from the transaction — that
+  // matches the order in the broker's "visible to client" checklist, so
+  // clients see them in a predictable order (not shuffled by dates).
+  const sortedMs = txn.milestones || [];
   const docs = txn.documents || [];
 
   return (

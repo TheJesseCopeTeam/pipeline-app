@@ -7965,6 +7965,62 @@ function ClientPortalView({ token }) {
           </div>
         )}
 
+        {/* ─── Contacts ─────────────────────────────────────────────────
+            Show contacts relevant to the client: their broker (Jesse's team),
+            the other broker, escrow officer, and lender. Only shows contacts
+            that actually have a name. */}
+        {(() => {
+          const contacts = txn.contacts || {};
+          const buildContactList = () => {
+            // For a listing transaction, the client is the SELLER, so their broker
+            // is the listing broker. For a buyer transaction, they're the BUYER,
+            // so their broker is the selling broker.
+            const isListing = txn.type === "listing";
+            const yourBrokerKey = isListing ? "listingBroker" : "sellingBroker";
+            const otherBrokerKey = isListing ? "sellingBroker" : "listingBroker";
+            return [
+              { label: "Your Broker", contact: contacts[yourBrokerKey] },
+              { label: isListing ? "Buyer's Broker" : "Seller's Broker", contact: contacts[otherBrokerKey] },
+              { label: "Escrow Officer", contact: contacts.escrow },
+              { label: "Lender", contact: contacts.lender },
+            ].filter(c => c.contact && c.contact.name && c.contact.name.trim());
+          };
+          const contactList = buildContactList();
+          if (contactList.length === 0) return null;
+          return (
+            <div style={{ padding: "20px 32px", borderBottom: "1px solid #d3d7df" }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.1em", color: "#6b7585", fontWeight: 600, marginBottom: 12 }}>
+                Your Team
+              </div>
+              {contactList.map((c, i) => (
+                <div key={i} style={{ padding: "10px 0", borderBottom: i < contactList.length - 1 ? "1px solid #eaecf0" : "none" }}>
+                  <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#8b96a5", fontWeight: 600, marginBottom: 4 }}>
+                    {c.label}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#1a2c47" }}>
+                    {c.contact.name}
+                  </div>
+                  {c.contact.company && (
+                    <div style={{ fontSize: 12, color: "#6b7585", marginTop: 2 }}>{c.contact.company}</div>
+                  )}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 6 }}>
+                    {c.contact.phone && (
+                      <a href={`tel:${c.contact.phone}`} style={{ fontSize: 12, color: "#c4602f", textDecoration: "none" }}>
+                        📞 {c.contact.phone}
+                      </a>
+                    )}
+                    {c.contact.email && (
+                      <a href={`mailto:${c.contact.email}`} style={{ fontSize: 12, color: "#c4602f", textDecoration: "none" }}>
+                        ✉ {c.contact.email}
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
         {/* Contact footer */}
         <div style={{ padding: "20px 32px", background: "#eaecf0", textAlign: "center", fontSize: 12, color: "#6b7585" }}>
           Questions? Contact The Jesse Cope Team · RE/MAX Premier Group

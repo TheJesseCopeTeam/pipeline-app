@@ -88,11 +88,23 @@ const CLIENT_PORTAL_NEVER_SHARE = [
 ];
 
 const CONTACT_ROLES = [
-  { key: "listingBroker", label: "Listing Broker",  icon: Briefcase },
-  { key: "sellingBroker", label: "Selling Broker",  icon: Briefcase },
-  { key: "escrow",        label: "Escrow Officer",  icon: Scale },
-  { key: "lender",        label: "Lender",          icon: Landmark },
+  { key: "listingBroker",  label: "Listing Broker",         icon: Briefcase },
+  { key: "sellingBroker",  label: "Selling Broker",         icon: Briefcase },
+  { key: "directorOfOps",  label: "Director of Operations", icon: UserCircle2 },
+  { key: "escrow",         label: "Escrow Officer",         icon: Scale },
+  { key: "lender",         label: "Lender",                 icon: Landmark },
 ];
+
+// Default info that pre-fills for team members on new transactions.
+// If Jesse's info changes, update it here.
+const TEAM_DEFAULTS = {
+  directorOfOps: {
+    name: "Mercedes Pucci",
+    company: "The Jesse Cope Team | RE/MAX Premier Group",
+    phone: "360-355-0646",
+    email: "jrcopesellshomes@gmail.com",
+  },
+};
 
 // Build a deduped directory of all contacts across all transactions.
 // Used for autocomplete suggestions in the contact name fields — if you've
@@ -699,6 +711,7 @@ function newTransaction(type) {
     contacts: {
       listingBroker: { name: "", company: "", phone: "", email: "" },
       sellingBroker: { name: "", company: "", phone: "", email: "" },
+      directorOfOps: { ...TEAM_DEFAULTS.directorOfOps },
       escrow:        { name: "", company: "", phone: "", email: "" },
       lender:        { name: "", company: "", phone: "", email: "" },
     },
@@ -8160,6 +8173,7 @@ function ClientPortalView({ token }) {
             const otherBrokerKey = isListing ? "sellingBroker" : "listingBroker";
             return [
               { label: "Your Broker", contact: contacts[yourBrokerKey] },
+              { label: "Director of Operations", contact: contacts.directorOfOps },
               { label: isListing ? "Buyer's Broker" : "Seller's Broker", contact: contacts[otherBrokerKey] },
               { label: "Escrow Officer", contact: contacts.escrow },
               { label: "Lender", contact: contacts.lender },

@@ -3825,6 +3825,7 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
       sellerName: item.ownerName, sellerPhone: item.ownerPhone, sellerEmail: item.ownerEmail,
       listPrice: item.estimatedPrice,
       notes: combinedNotes,
+      prelistChecklist: item.prelistChecklist || [],
     });
   };
 
@@ -4024,6 +4025,18 @@ function FutureListingModal({ item, onClose, onSave, onRemove, onConvert, isNew 
               <CheckInPanel lead={form} onChange={setForm} />
             </Field>
           </FormSection>
+
+          {/* Pre-listing checklist — same feature as on active transactions.
+              Transfers to the new transaction on conversion. */}
+          <ChecklistSection
+            title="Pre-Listing Checklist"
+            icon={CheckCircle2}
+            items={form.prelistChecklist || []}
+            onChange={(items) => update("prelistChecklist", items)}
+            templates={loadPrelistTemplates()}
+            onApplyTemplate={(t) => update("prelistChecklist",
+              t.items.map(text => ({ id: newId(), text, done: false })))}
+          />
         </div>
         <div style={styles.modalFooter}>
           {!isNew && (

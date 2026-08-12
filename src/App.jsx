@@ -7965,6 +7965,46 @@ function Style() {
         .todos-row { grid-template-columns: 1fr !important; }
       }
 
+      /* ═══════════════════════════════════════════════════════════════════
+         MOBILE (phone) — makes everything less cramped
+         ═══════════════════════════════════════════════════════════════════ */
+      @media (max-width: 768px) {
+        /* Base font size — bigger and more readable */
+        html, body { font-size: 15px; }
+
+        /* Prevent iOS auto-zoom on input focus.
+           iOS zooms whenever an input has font-size < 16px. Setting all
+           inputs to 16px keeps the layout stable when tapping fields. */
+        input, select, textarea { font-size: 16px !important; }
+
+        /* Bigger touch targets on all buttons */
+        button { min-height: 40px; padding: 10px 14px; }
+        /* Except tiny icon buttons in headers */
+        button[title*="Remove"], button[title*="Delete"],
+        button[title*="Rename"], button[title*="Move"],
+        button[title*="Set reminder"] { min-height: 32px; padding: 6px; }
+
+        /* Give forms more breathing room */
+        input, select, textarea { padding: 12px !important; }
+
+        /* Modals: use more of the screen and less margin */
+        [role="dialog"], .modal { max-width: 100vw !important; margin: 0 !important; }
+
+        /* Prevent horizontal scroll from too-wide content */
+        body { overflow-x: hidden; }
+
+        /* Give more padding around main content */
+        main { padding: 16px !important; }
+
+        /* Text on cards a bit larger */
+        .card, [data-card] { font-size: 15px; }
+      }
+
+      /* Extra-small phones (like iPhone SE / mini) */
+      @media (max-width: 380px) {
+        html, body { font-size: 14px; }
+      }
+
       /* Add-widget card hover */
       button[data-add-widget]:hover {
         border-color: var(--ink) !important;

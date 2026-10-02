@@ -1660,7 +1660,7 @@ function MainApp({ user }) {
             }}
           />
         ) : view === "social" ? (
-          <SocialMediaTab />
+          <SocialMediaTab transactions={transactions} isCloud={isCloud} />
         ) : (
           <>
             <div style={styles.searchBar}>
@@ -6306,11 +6306,125 @@ async function removeDocumentBlob(docId, isCloud) {
       const user = await getCurrentUser();
       if (user) {
         const path = `${user.id}/${docId}`;
-        await supabase.storage.from(STORAGE_BUCKET).remove([path]);
+        // Also remove the small preview copy if this was a photo
+        await supabase.storage.from(STORAGE_BUCKET).remove([path, `${path}_preview`]);
       }
     } catch (e) { /* swallow */ }
   }
   try { localStorage.removeItem(DOC_BLOB_PREFIX + docId); } catch (e) {}
+}
+
+// ─── Listing file sections ────────────────────────────────────────────────
+// Listing transactions sort their files into three sections. The Social Media
+// tab reads the NWMLS printout + photos from here.
+const DOC_CATEGORIES = [
+  {
+    id: "nwmls", short: "NWMLS", icon: "🏷", label: "NWMLS Listing Printout",
+    hint: "The NWMLS listing detail printout (PDF)",
+    accept: ".pdf,.png,.jpg,.jpeg",
+    button: "Upload NWMLS printout",
+    empty: "No NWMLS printout yet.",
+  },
+  {
+    id: "photos", short: "Photos", icon: "📷", label: "Photos",
+    hint: "JPG or PNG · first photo is the cover",
+    accept: "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp",
+    button: "Upload photos",
+    empty: "No photos yet. Drag photos here or click below.",
+  },
+  {
+    id: "docs", short: "Docs", icon: "📁", label: "Documents",
+    hint: "Agreements, disclosures, anything else",
+    accept: ".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt",
+    button: "Upload documents",
+    empty: "No documents yet.",
+  },
+];
+
+// Older files (uploaded before sections existed) have no category:
+// images count as photos, everything else as documents.
+function docCategory(doc) {
+  if (doc.category && DOC_CATEGORIES.some(c => c.id === doc.category)) return doc.category;
+  return doc.type?.startsWith("image/") ? "photos" : "docs";
+}
+
+// Shrink a photo to a ~1280px JPEG in the browser. Returns a Blob, or null if
+// the browser can't read the image (e.g. HEIC on some browsers).
+async function makeImagePreview(file, maxDim = 1280) {
+  let url = "";
+  try {
+    url = URL.createObjectURL(file);
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Could not read image"));
+      i.src = url;
+    });
+    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return await new Promise(resolve => canvas.toBlob(b => resolve(b), "image/jpeg", 0.82));
+  } catch (e) {
+    return null;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+  }
+}
+
+async function saveDocumentPreview(docId, blob) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return false;
+    const { error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(`${user.id}/${docId}_preview`, blob, { upsert: true, contentType: "image/jpeg" });
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    console.error("Preview upload failed:", e);
+    return false;
+  }
+}
+
+// Signed (temporary) URLs for several stored files at once.
+// `keys` are doc ids (or "<id>_preview"). Returns { key: url }.
+async function getSignedDocUrls(keys, expiresIn = 3600) {
+  const out = {};
+  if (!supabase || !keys || keys.length === 0) return out;
+  try {
+    const user = await getCurrentUser();
+    if (!user) return out;
+    const paths = keys.map(k => `${user.id}/${k}`);
+    const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrls(paths, expiresIn);
+    if (error) throw error;
+    (data || []).forEach((row, i) => {
+      if (row && row.signedUrl && !row.error) out[keys[i]] = row.signedUrl;
+    });
+  } catch (e) {
+    console.error("Signed URL batch failed:", e);
+  }
+  return out;
+}
+
+// Signed URL that makes the browser download the file under its real name.
+async function getDownloadUrl(docId, fileName) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) return null;
+    const { data, error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .createSignedUrl(`${user.id}/${docId}`, 600, { download: fileName || true });
+    if (error) throw error;
+    return data?.signedUrl || null;
+  } catch (e) {
+    console.error("Download URL failed:", e);
+    return null;
+  }
 }
 
 async function downloadDocument(doc, isCloud) {
@@ -6377,21 +6491,48 @@ function documentIcon(type, name) {
 }
 
 function DocumentsSection({ txn, onUpdate, isCloud }) {
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState(""); // category id currently uploading, or ""
   const [error, setError] = useState("");
   const docs = txn.documents || [];
-  const fileInputRef = useRef(null);
-  const [dragActive, setDragActive] = useState(false);
+  const isListing = txn.type === "listing";
+  const [thumbs, setThumbs] = useState({}); // docId -> image src for photo tiles
 
-  const handleFiles = async (files) => {
+  // Load thumbnails for photos (signed URLs in cloud, base64 in local mode)
+  const photoKey = docs.filter(d => d.type?.startsWith("image/")).map(d => d.id + (d.hasPreview ? "p" : "")).join(",");
+  useEffect(() => {
+    let cancelled = false;
+    const photos = docs.filter(d => d.type?.startsWith("image/"));
+    if (photos.length === 0) { setThumbs({}); return; }
+    (async () => {
+      const next = {};
+      const cloudPhotos = photos.filter(d => d.cloud === true || (d.cloud === undefined && isCloud));
+      const localPhotos = photos.filter(d => !cloudPhotos.includes(d));
+      for (const d of localPhotos) {
+        const b64 = localStorage.getItem(DOC_BLOB_PREFIX + d.id);
+        if (b64) next[d.id] = `data:${d.type};base64,${b64}`;
+      }
+      if (cloudPhotos.length > 0 && isCloud) {
+        const urls = await getSignedDocUrls(cloudPhotos.map(d => d.hasPreview ? `${d.id}_preview` : d.id));
+        cloudPhotos.forEach(d => {
+          const u = urls[d.hasPreview ? `${d.id}_preview` : d.id];
+          if (u) next[d.id] = u;
+        });
+      }
+      if (!cancelled) setThumbs(next);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoKey, isCloud]);
+
+  const handleFiles = async (files, category) => {
     setError("");
     if (!files || files.length === 0) return;
 
     const totalNow = isCloud ? 0 : totalDocBytes();
     const newDocs = [];
-    setUploading(true);
+    setUploading(category || "docs");
 
-    for (const file of files) {
+    for (const file of Array.from(files)) {
       const sizeLimit = isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE;
       if (file.size > sizeLimit) {
         setError(`"${file.name}" is too large (${formatFileSize(file.size)}). Max per file is ${formatFileSize(sizeLimit)}.`);
@@ -6414,6 +6555,14 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
           setError(`Couldn't save "${file.name}".`);
           continue;
         }
+        // For photos in the cloud, also save a small preview copy. The preview
+        // is what the Social Media tab sends to the AI (fast + cheap); the
+        // original full-size photo is what you download to post.
+        let hasPreview = false;
+        if (isCloud && file.type?.startsWith("image/")) {
+          const preview = await makeImagePreview(file);
+          if (preview) hasPreview = await saveDocumentPreview(docId, preview);
+        }
         newDocs.push({
           id: docId,
           name: file.name,
@@ -6421,6 +6570,8 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
           size: file.size,
           addedAt: new Date().toISOString(),
           cloud: !!isCloud,
+          category: category || "docs",
+          hasPreview,
         });
       } catch (e) {
         setError(`Failed to upload "${file.name}": ${e.message}`);
@@ -6430,8 +6581,7 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
     if (newDocs.length > 0) {
       onUpdate({ ...txn, documents: [...docs, ...newDocs] });
     }
-    setUploading(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    setUploading("");
   };
 
   const removeDoc = async (doc) => {
@@ -6448,101 +6598,187 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
     onUpdate({ ...txn, documents: docs.map(d => d.id === doc.id ? { ...d, name: newName } : d) });
   };
 
+  const moveDoc = (doc, category) => {
+    onUpdate({ ...txn, documents: docs.map(d => d.id === doc.id ? { ...d, category } : d) });
+  };
+
+  // Move a photo to the front of the list (first photo = cover photo)
+  const makeCover = (doc) => {
+    const others = docs.filter(d => d.id !== doc.id);
+    onUpdate({ ...txn, documents: [{ ...doc }, ...others] });
+  };
+
   // Wrappers for open/download that pass each doc's cloud flag
   const openDoc = (doc) => openDocument(doc, doc.cloud === true || (doc.cloud === undefined && isCloud));
   const downloadDoc = (doc) => downloadDocument(doc, doc.cloud === true || (doc.cloud === undefined && isCloud));
 
+  const docRow = (doc) => (
+    <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8, flexWrap: "wrap" }}>
+      <div style={{ fontSize: 20 }}>{documentIcon(doc.type, doc.name)}</div>
+      <div style={{ flex: 1, minWidth: 120 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</div>
+        <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>
+          {formatFileSize(doc.size)} · {fmtDate(doc.addedAt?.split("T")[0])}
+        </div>
+      </div>
+      {isListing && (
+        <select
+          value={docCategory(doc)}
+          onChange={(e) => moveDoc(doc, e.target.value)}
+          title="Move to another section"
+          style={{ fontSize: 11, padding: "3px 4px", border: "1px solid var(--ink-line)", borderRadius: 6, background: "var(--paper-soft)", color: "var(--ink-soft)" }}
+        >
+          {DOC_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.short}</option>)}
+        </select>
+      )}
+      <button onClick={() => openDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Open in new tab">
+        Open
+      </button>
+      <button onClick={() => downloadDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Download">
+        <Download size={11} />
+      </button>
+      <button onClick={() => renameDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Rename">
+        <Edit3 size={12} />
+      </button>
+      <button onClick={() => removeDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Remove">
+        <X size={12} />
+      </button>
+    </div>
+  );
+
+  const photoGrid = (photos) => (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, marginBottom: 12 }}>
+      {photos.map((doc, i) => (
+        <div key={doc.id} style={{ position: "relative", borderRadius: 8, overflow: "hidden", border: "1px solid var(--ink-line)", background: "var(--paper)", aspectRatio: "4 / 3" }}>
+          {thumbs[doc.id] ? (
+            <img src={thumbs[doc.id]} alt={doc.name} onClick={() => openDoc(doc)}
+              style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer", display: "block" }} />
+          ) : (
+            <div onClick={() => openDoc(doc)} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, cursor: "pointer" }}>🖼</div>
+          )}
+          {i === 0 && (
+            <div style={{ position: "absolute", left: 4, top: 4, background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: 10, padding: "2px 6px", borderRadius: 4, letterSpacing: "0.05em" }}>COVER</div>
+          )}
+          <div style={{ position: "absolute", right: 4, top: 4, display: "flex", gap: 4 }}>
+            {i !== 0 && (
+              <button onClick={() => makeCover(doc)} title="Make cover photo"
+                style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, padding: "2px 5px", cursor: "pointer" }}>★</button>
+            )}
+            <button onClick={() => downloadDoc(doc)} title="Download"
+              style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, padding: "2px 5px", cursor: "pointer", display: "flex", alignItems: "center" }}><Download size={11} /></button>
+            <button onClick={() => removeDoc(doc)} title="Remove"
+              style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, padding: "2px 5px", cursor: "pointer", display: "flex", alignItems: "center" }}><X size={11} /></button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  // Buyer transactions keep the single "Documents" list. Listings get three
+  // sections: NWMLS printout, Photos, Documents.
+  const groups = isListing
+    ? DOC_CATEGORIES
+    : [{ id: "all", label: "Documents", accept: ".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt", empty: "No documents yet. Drag files here or click below to upload." }];
+
   return (
     <div style={{ marginTop: 28 }}>
       <div style={styles.formSectionTitle}>
-        <FileText size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Documents {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400, marginLeft: 6 }}>({docs.length})</span>}
+        <FileText size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> {isListing ? "Listing Files" : "Documents"} {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400, marginLeft: 6 }}>({docs.length})</span>}
       </div>
-      <div
-        style={{
-          padding: 14,
-          background: "var(--paper-soft)",
-          border: dragActive ? "1px dashed var(--accent)" : "1px solid var(--ink-line)",
-          borderRadius: 12,
-          transition: "border 0.15s",
-        }}
-        onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-        onDragLeave={() => setDragActive(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragActive(false);
-          handleFiles(e.dataTransfer.files);
-        }}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {groups.map(g => (
+          <DocGroup
+            key={g.id}
+            group={g}
+            showHeader={isListing}
+            docs={g.id === "all" ? docs : docs.filter(d => docCategory(d) === g.id)}
+            uploading={uploading === (g.id === "all" ? "docs" : g.id)}
+            anyUploading={!!uploading}
+            onFiles={(files) => handleFiles(files, g.id === "all" ? undefined : g.id)}
+            renderList={(list) => g.id === "photos"
+              ? photoGrid(list)
+              : <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>{list.map(docRow)}</div>}
+          />
+        ))}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(196, 96, 47, 0.1)", border: "1px solid var(--accent-soft)", borderRadius: 6, color: "var(--accent)", fontSize: 12 }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-soft)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+        <span>Max {formatFileSize(isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE)} per file</span>
+        {!isCloud && (
+          <span style={{ fontWeight: 500 }}>
+            {formatFileSize(totalDocBytes())} of {formatFileSize(MAX_TOTAL_DOC_SIZE)} used
+          </span>
+        )}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)" }}>
+        {isCloud
+          ? (isListing ? "☁ Stored in cloud. The Social Media tab uses this listing's NWMLS printout and photos to write posts." : "☁ Stored in cloud — syncs across all your devices.")
+          : "📍 Stored on this device only. Sign in for cloud sync."}
+      </div>
+    </div>
+  );
+}
+
+// One upload box (used for each section: NWMLS printout / Photos / Documents)
+function DocGroup({ group, showHeader, docs, uploading, anyUploading, onFiles, renderList }) {
+  const inputRef = useRef(null);
+  const [dragActive, setDragActive] = useState(false);
+  return (
+    <div
+      style={{
+        padding: 14,
+        background: "var(--paper-soft)",
+        border: dragActive ? "1px dashed var(--accent)" : "1px solid var(--ink-line)",
+        borderRadius: 12,
+        transition: "border 0.15s",
+      }}
+      onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+      onDragLeave={() => setDragActive(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragActive(false);
+        onFiles(e.dataTransfer.files);
+      }}
+    >
+      {showHeader && (
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>
+            {group.icon} {group.label} {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>({docs.length})</span>}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--ink-soft)", textAlign: "right" }}>{group.hint}</div>
+        </div>
+      )}
+
+      {docs.length === 0 && !uploading && (
+        <div style={{ textAlign: "center", padding: "10px 0 14px", color: "var(--ink-soft)", fontSize: 13 }}>
+          {group.empty}
+        </div>
+      )}
+
+      {docs.length > 0 && renderList(docs)}
+
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept={group.accept}
+        onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }}
+        style={{ display: "none" }}
+      />
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={anyUploading}
+        style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 14px", fontSize: 13, width: "100%", justifyContent: "center", opacity: anyUploading ? 0.6 : 1 }}
       >
-        {docs.length === 0 && !uploading && (
-          <div style={{ textAlign: "center", padding: "16px 0", color: "var(--ink-soft)", fontSize: 13 }}>
-            No documents yet. Drag files here or click below to upload.
-          </div>
-        )}
-
-        {docs.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-            {docs.map(doc => (
-              <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
-                <div style={{ fontSize: 20 }}>{documentIcon(doc.type, doc.name)}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>
-                    {formatFileSize(doc.size)} · {fmtDate(doc.addedAt?.split("T")[0])}
-                  </div>
-                </div>
-                <button onClick={() => openDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Open in new tab">
-                  Open
-                </button>
-                <button onClick={() => downloadDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Download">
-                  <Download size={11} />
-                </button>
-                <button onClick={() => renameDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Rename">
-                  <Edit3 size={12} />
-                </button>
-                <button onClick={() => removeDoc(doc)} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", padding: 4, cursor: "pointer" }} title="Remove">
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt"
-          onChange={(e) => handleFiles(e.target.files)}
-          style={{ display: "none" }}
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-          style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 14px", fontSize: 13, width: "100%", justifyContent: "center", opacity: uploading ? 0.6 : 1 }}
-        >
-          {uploading ? <><Loader2 size={13} className="spin" /> Uploading…</> : <><Upload size={13} /> Upload files</>}
-        </button>
-
-        {error && (
-          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(196, 96, 47, 0.1)", border: "1px solid var(--accent-soft)", borderRadius: 6, color: "var(--accent)", fontSize: 12 }}>
-            {error}
-          </div>
-        )}
-
-        <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-soft)", display: "flex", justifyContent: "space-between" }}>
-          <span>PDF, images, Office docs · Max {formatFileSize(isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE)} per file</span>
-          {!isCloud && (
-            <span style={{ fontWeight: 500 }}>
-              {formatFileSize(totalDocBytes())} of {formatFileSize(MAX_TOTAL_DOC_SIZE)} used
-            </span>
-          )}
-        </div>
-        <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)" }}>
-          {isCloud
-            ? "☁ Stored in cloud — syncs across all your devices."
-            : "📍 Stored on this device only. Sign in for cloud sync."}
-        </div>
-      </div>
+        {uploading ? <><Loader2 size={13} className="spin" /> Uploading…</> : <><Upload size={13} /> {group.button || "Upload files"}</>}
+      </button>
     </div>
   );
 }
@@ -8305,8 +8541,8 @@ function socialFileToBase64(file) {
   });
 }
 
-function SocialMediaTab() {
-  const [mode, setMode] = useState("random");
+function SocialMediaTab({ transactions = [], isCloud = false }) {
+  const [mode, setMode] = useState("listings"); // "listings" | "random" | "listing"
   const [postType, setPostType] = useState("surprise");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState(null);
@@ -8316,6 +8552,12 @@ function SocialMediaTab() {
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef(null);
 
+  // "My listings" mode
+  const [request, setRequest] = useState("");
+  const [picked, setPicked] = useState([]); // txn ids tapped by the user (optional)
+  const [posts, setPosts] = useState([]);   // [{ title, listingIds, post, photoIds }]
+  const [photoUrls, setPhotoUrls] = useState({}); // docId -> preview/thumbnail url
+
   // Brand palette (matches the original SocialMediaTab file)
   const C = {
     cream: "#F5F1E8", card: "#FBF9F4", taupe: "#8A7E6B",
@@ -8324,8 +8566,100 @@ function SocialMediaTab() {
   };
   const serif = "Cambria, Georgia, 'Times New Roman', serif";
 
+  // Active listings = listing transactions that aren't pending or closed
+  const activeListings = useMemo(
+    () => transactions
+      .filter(t => t.type === "listing" && isActiveStage(t))
+      .sort((a, b) => (a.address || "").localeCompare(b.address || "")),
+    [transactions]
+  );
+  const txnById = useMemo(() => Object.fromEntries(transactions.map(t => [t.id, t])), [transactions]);
+  const docById = useMemo(() => {
+    const m = {};
+    transactions.forEach(t => (t.documents || []).forEach(d => { m[d.id] = { ...d, txnId: t.id }; }));
+    return m;
+  }, [transactions]);
+
+  const filesFor = (t) => {
+    const docs = t.documents || [];
+    return {
+      nwmls: docs.filter(d => docCategory(d) === "nwmls"),
+      photos: docs.filter(d => docCategory(d) === "photos" && d.type?.startsWith("image/")),
+    };
+  };
+
+  async function readJson(res) {
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch { throw new Error(res.status === 504 ? "That took too long — try fewer listings at once." : "Server error. Try again in a moment."); }
+  }
+
+  async function generateListings() {
+    setError(""); setPosts([]); setLoading(true);
+    try {
+      if (!isCloud) throw new Error("Sign in (cloud mode) to use your listings — files need to be stored in the cloud.");
+      if (activeListings.length === 0) throw new Error("No active listings in Pipeline yet.");
+      const ask = request.trim() || "Create a social media post for each of my active listings.";
+      const roster = picked.length > 0 ? activeListings.filter(t => picked.includes(t.id)) : activeListings;
+
+      // Get temporary links to each listing's NWMLS printout + photos so the
+      // AI can read them directly from storage.
+      const keys = [];
+      roster.forEach(t => {
+        const { nwmls, photos } = filesFor(t);
+        nwmls.slice(0, 2).forEach(d => keys.push(d.id));
+        photos.slice(0, 15).forEach(d => keys.push(d.hasPreview ? `${d.id}_preview` : d.id));
+      });
+      const urls = await getSignedDocUrls(keys);
+
+      const thumbMap = {};
+      const listings = roster.map(t => {
+        const { nwmls, photos } = filesFor(t);
+        return {
+          id: t.id,
+          address: t.address || "",
+          city: t.city || "",
+          state: t.state || "",
+          zip: t.zip || "",
+          listPrice: t.listPrice || t.price || "",
+          status: t.status || "",
+          includedItems: t.includedItems || "",
+          nwmls: nwmls.slice(0, 2)
+            .filter(d => urls[d.id])
+            .map(d => ({ id: d.id, type: d.type, url: urls[d.id] })),
+          photos: photos.slice(0, 15)
+            .map(d => {
+              const key = d.hasPreview ? `${d.id}_preview` : d.id;
+              if (!urls[key]) return null;
+              thumbMap[d.id] = urls[key];
+              // Originals without a preview are only sent if they're small enough for the AI
+              const tooBig = !d.hasPreview && d.size > 4.5 * 1024 * 1024;
+              return tooBig ? null : { id: d.id, name: d.name, type: d.hasPreview ? "image/jpeg" : d.type, url: urls[key] };
+            })
+            .filter(Boolean),
+        };
+      });
+      setPhotoUrls(thumbMap);
+
+      const res = await fetch("/api/social-generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode: "listings", request: ask, listings, forceAll: picked.length > 0 }),
+      });
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || "Generation failed.");
+      setPosts((data.posts || []).map((p, i) => ({ ...p, key: `${Date.now()}_${i}` })));
+      if (!data.posts || data.posts.length === 0) throw new Error("No posts came back — try rewording your request.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function generate() {
-    setError(""); setCopied(""); setLoading(true);
+    if (mode === "listings") return generateListings();
+    setError(""); setCopied(false); setLoading(true);
     try {
       let body;
       if (mode === "listing") {
@@ -8340,7 +8674,7 @@ function SocialMediaTab() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok) throw new Error(data.error || "Generation failed.");
       setResult(data.post || "");
     } catch (e) {
@@ -8360,13 +8694,22 @@ function SocialMediaTab() {
     }
   }
 
+  const togglePick = (id) => setPicked(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+
+  const QUICK_ASKS = [
+    { label: "One post with all active listings", text: "Create me a social media post with all my active listings" },
+    { label: "A post for each listing", text: "Make a separate post for each of my active listings" },
+    { label: "Price improvement…", text: "Make a price improvement post for the ___ listing. New price: $___" },
+    { label: "Open house…", text: "Make an open house post for the ___ listing — open house this Saturday 12–2" },
+  ];
+
   const s = {
     wrap: { fontFamily: serif, color: C.charcoal, background: C.cream, padding: "28px", borderRadius: 14, maxWidth: 760, margin: "0 auto" },
     h1: { fontSize: 26, margin: "0 0 4px", letterSpacing: 0.3 },
     sub: { color: C.taupe, fontSize: 14, margin: "0 0 22px" },
-    toggleRow: { display: "flex", gap: 8, marginBottom: 22 },
+    toggleRow: { display: "flex", gap: 8, marginBottom: 22, flexWrap: "wrap" },
     toggle: (active) => ({
-      flex: 1, padding: "12px 14px", borderRadius: 10,
+      flex: 1, minWidth: 140, padding: "12px 14px", borderRadius: 10,
       border: `1px solid ${active ? C.charcoal : C.line}`,
       background: active ? C.charcoal : C.card, color: active ? C.cream : C.ink,
       cursor: "pointer", fontFamily: serif, fontSize: 15,
@@ -8385,7 +8728,7 @@ function SocialMediaTab() {
     },
     resultCard: { background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginTop: 8 },
     resultText: { width: "100%", boxSizing: "border-box", minHeight: 200, padding: 14, borderRadius: 8, border: `1px solid ${C.line}`, fontFamily: serif, fontSize: 16, lineHeight: 1.5, color: C.charcoal, resize: "vertical", whiteSpace: "pre-wrap" },
-    actionRow: { display: "flex", gap: 10, marginTop: 12 },
+    actionRow: { display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" },
     smallBtn: (primary) => ({
       padding: "10px 16px", borderRadius: 8,
       border: `1px solid ${primary ? C.charcoal : C.line}`,
@@ -8393,6 +8736,13 @@ function SocialMediaTab() {
       color: primary ? C.cream : C.ink,
       fontFamily: serif, fontSize: 14, cursor: "pointer",
     }),
+    chip: { padding: "6px 10px", borderRadius: 999, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontFamily: serif, fontSize: 13, cursor: "pointer" },
+    listingRow: (on) => ({
+      display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8,
+      border: `1px solid ${on ? C.charcoal : C.line}`, background: on ? "#fff" : C.card,
+      cursor: "pointer", textAlign: "left", width: "100%", fontFamily: serif, color: C.charcoal,
+    }),
+    badge: (ok) => ({ fontSize: 11.5, padding: "2px 8px", borderRadius: 999, background: ok ? "#EAF1E4" : "#F6E9E0", color: ok ? "#4F6B3A" : "#9A5A2E", whiteSpace: "nowrap" }),
     error: { background: "#FBEAEA", border: `1px solid ${C.red}`, color: C.redDark, padding: "10px 14px", borderRadius: 8, fontSize: 14, marginTop: 14 },
     hint: { color: C.taupe, fontSize: 12.5, marginTop: 4 },
   };
@@ -8403,43 +8753,108 @@ function SocialMediaTab() {
       <p style={s.sub}>Fresh, on-brand posts for Facebook &amp; Instagram — in seconds.</p>
 
       <div style={s.toggleRow}>
+        <button style={s.toggle(mode === "listings")} onClick={() => setMode("listings")}>My listings</button>
         <button style={s.toggle(mode === "random")} onClick={() => setMode("random")}>Random post</button>
         <button style={s.toggle(mode === "listing")} onClick={() => setMode("listing")}>From MLS sheet</button>
       </div>
 
-      <div style={s.card}>
-        {mode === "random" ? (
-          <>
-            <label style={s.label}>Post type</label>
-            <select style={s.select} value={postType} onChange={(e) => setPostType(e.target.value)}>
-              {SOCIAL_POST_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-            </select>
-          </>
-        ) : (
-          <>
-            <label style={s.label}>MLS listing sheet (PDF)</label>
-            <div style={s.dropZone} onClick={() => fileInputRef.current?.click()}>
-              {file ? <span style={{ color: C.charcoal }}>📄 {file.name} — tap to change</span> : <span>Tap to upload the listing data sheet (PDF)</span>}
-            </div>
-            <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" style={{ display: "none" }}
-              onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          </>
-        )}
+      {mode === "listings" ? (
+        <div style={s.card}>
+          <label style={s.label}>What do you want?</label>
+          <textarea style={{ ...s.textarea, minHeight: 80 }}
+            placeholder={'e.g. "Create me a social media post with all my active listings" or "Make a post for the 23rd and Bond listings"'}
+            value={request} onChange={(e) => setRequest(e.target.value)} />
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, marginBottom: 18 }}>
+            {QUICK_ASKS.map(q => (
+              <button key={q.label} style={s.chip} onClick={() => setRequest(q.text)}>{q.label}</button>
+            ))}
+          </div>
 
-        <label style={s.label}>Extra direction (optional)</label>
-        <textarea style={s.textarea}
-          placeholder={mode === "listing" ? "e.g. emphasize the shop and RV parking; keep it short" : "e.g. tie it to hunting season; keep it upbeat"}
-          value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <p style={s.hint}>Numbers like rates or prices are never invented — the post will use [brackets] for you to fill in unless they're on the sheet.</p>
-      </div>
+          <label style={s.label}>Your active listings ({activeListings.length})</label>
+          {activeListings.length === 0 ? (
+            <p style={s.hint}>No active listings yet. Add a listing in Pipeline, then upload its NWMLS printout and photos under Listing Files.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {activeListings.map(t => {
+                const { nwmls, photos } = filesFor(t);
+                const on = picked.includes(t.id);
+                return (
+                  <button key={t.id} style={s.listingRow(on)} onClick={() => togglePick(t.id)}>
+                    <span style={{ fontSize: 16, width: 18 }}>{on ? "☑" : "☐"}</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.address || "(no address)"}</span>
+                      <span style={{ display: "block", fontSize: 12.5, color: C.taupe }}>{[t.city, t.listPrice ? fmtMoney(t.listPrice) : ""].filter(Boolean).join(" · ")}</span>
+                    </span>
+                    <span style={s.badge(nwmls.length > 0)}>{nwmls.length > 0 ? "✓ NWMLS" : "No NWMLS"}</span>
+                    <span style={s.badge(photos.length > 0)}>{photos.length} 📷</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <p style={s.hint}>
+            {picked.length > 0
+              ? `Using only the ${picked.length} listing${picked.length > 1 ? "s" : ""} you tapped.`
+              : "Tap listings to pick them, or just name them in your request (\"the 23rd and Bond listings\")."}
+            {" "}Missing NWMLS printouts or photos? Open the listing and add them under Listing Files.
+          </p>
+        </div>
+      ) : (
+        <div style={s.card}>
+          {mode === "random" ? (
+            <>
+              <label style={s.label}>Post type</label>
+              <select style={s.select} value={postType} onChange={(e) => setPostType(e.target.value)}>
+                {SOCIAL_POST_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </>
+          ) : (
+            <>
+              <label style={s.label}>MLS listing sheet (PDF)</label>
+              <div style={s.dropZone} onClick={() => fileInputRef.current?.click()}>
+                {file ? <span style={{ color: C.charcoal }}>📄 {file.name} — tap to change</span> : <span>Tap to upload the listing data sheet (PDF)</span>}
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" style={{ display: "none" }}
+                onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            </>
+          )}
+
+          <label style={s.label}>Extra direction (optional)</label>
+          <textarea style={s.textarea}
+            placeholder={mode === "listing" ? "e.g. emphasize the shop and RV parking; keep it short" : "e.g. tie it to hunting season; keep it upbeat"}
+            value={notes} onChange={(e) => setNotes(e.target.value)} />
+          <p style={s.hint}>Numbers like rates or prices are never invented — the post will use [brackets] for you to fill in unless they're on the sheet.</p>
+        </div>
+      )}
 
       <button style={s.genBtn} onClick={generate} disabled={loading}>
-        {loading ? "Writing your post…" : "✍️  Generate post"}
+        {loading
+          ? (mode === "listings" ? "Reading your listings & writing…" : "Writing your post…")
+          : (mode === "listings" ? "✍️  Create post" : "✍️  Generate post")}
       </button>
+      {loading && mode === "listings" && <p style={{ ...s.hint, textAlign: "center" }}>This can take 20–60 seconds — it's reading the NWMLS printouts and looking at the photos.</p>}
 
       {error && <div style={s.error}>{error}</div>}
 
-      {result && (
+      {mode === "listings" && posts.map(p => (
+        <ListingPostCard
+          key={p.key}
+          post={p}
+          s={s}
+          C={C}
+          txnById={txnById}
+          docById={docById}
+          photoUrls={photoUrls}
+          onChange={(text) => setPosts(ps => ps.map(x => x.key === p.key ? { ...x, post: text } : x))}
+        />
+      ))}
+      {mode === "listings" && posts.length > 0 && (
+        <div style={{ textAlign: "center", marginTop: 14 }}>
+          <button style={s.smallBtn(false)} onClick={generate} disabled={loading}>↻ Regenerate</button>
+        </div>
+      )}
+
+      {mode !== "listings" && result && (
         <div style={s.resultCard}>
           <label style={s.label}>Your post — edit freely</label>
           <textarea style={s.resultText} value={result} onChange={(e) => setResult(e.target.value)} />
@@ -8449,6 +8864,79 @@ function SocialMediaTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// One generated post: editable text, copy button, and the photos picked for it
+function ListingPostCard({ post, s, C, txnById, docById, photoUrls, onChange }) {
+  const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const photos = (post.photoIds || []).map(id => docById[id]).filter(Boolean);
+  const addresses = (post.listingIds || []).map(id => txnById[id]?.address).filter(Boolean);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(post.post || "");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      alert("Copy failed — select the text and copy manually.");
+    }
+  }
+
+  async function downloadPhotos() {
+    setDownloading(true);
+    try {
+      for (let i = 0; i < photos.length; i++) {
+        const d = photos[i];
+        const ext = (d.name.match(/\.[a-z0-9]+$/i) || [".jpg"])[0];
+        const base = (txnById[d.txnId]?.address || "photo").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+        const url = await getDownloadUrl(d.id, `${String(i + 1).padStart(2, "0")}-${base}${ext}`);
+        if (!url) continue;
+        const a = document.createElement("a");
+        a.href = url;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        await new Promise(r => setTimeout(r, 400)); // let the browser start each download
+      }
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div style={{ ...s.resultCard, marginTop: 16 }}>
+      <label style={s.label}>{post.title || "Your post"}</label>
+      {addresses.length > 0 && <p style={{ ...s.hint, marginTop: -2, marginBottom: 10 }}>📍 {addresses.join(" · ")}</p>}
+      <textarea style={s.resultText} value={post.post || ""} onChange={(e) => onChange(e.target.value)} />
+
+      {photos.length > 0 && (
+        <>
+          <label style={{ ...s.label, marginTop: 14 }}>Suggested photos, in posting order ({photos.length})</label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", gap: 6 }}>
+            {photos.map((d, i) => (
+              <div key={d.id} style={{ position: "relative", aspectRatio: "4 / 3", borderRadius: 6, overflow: "hidden", border: `1px solid ${C.line}`, background: C.card }}>
+                {photoUrls[d.id]
+                  ? <img src={photoUrls[d.id]} alt={d.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>🖼</div>}
+                <span style={{ position: "absolute", left: 4, top: 4, background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: 11, padding: "1px 6px", borderRadius: 4 }}>{i + 1}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div style={s.actionRow}>
+        <button style={s.smallBtn(true)} onClick={copy}>{copied ? "✓ Copied!" : "Copy post"}</button>
+        {photos.length > 0 && (
+          <button style={s.smallBtn(false)} onClick={downloadPhotos} disabled={downloading}>
+            {downloading ? "Downloading…" : `⬇ Download ${photos.length} photo${photos.length > 1 ? "s" : ""}`}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

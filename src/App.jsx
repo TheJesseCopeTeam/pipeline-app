@@ -1668,6 +1668,15 @@ function MainApp({ user }) {
               <input type="text" placeholder="Search by address, party, or city…"
                 value={search} onChange={(e) => setSearch(e.target.value)} style={styles.searchInput} />
             </div>
+            {/* Cleanup button only on Closed tab — bulk-deletes photos from
+                closed listings to free Supabase storage. Keeps NWMLS printouts
+                and other documents. */}
+            {view === "closed" && isCloud && filtered.some(t => (t.documents || []).some(d => d.section === "photo")) && (
+              <ClosedPhotoCleanupButton
+                transactions={filtered}
+                onUpdate={async (txn) => { await handleSave(txn); }}
+              />
+            )}
             {filtered.length === 0 ? (
               <EmptyState type={view} onCreate={() => setEditing(newTransaction(view === "buyers" ? "buyer" : "listing"))} />
             ) : (
@@ -3423,6 +3432,107 @@ function TransactionCard({ txn, onClick }) {
         </div>
       </div>
     </button>
+  );
+}
+
+// ─── Closed photos cleanup ──────────────────────────────────────────────
+// Shows total photo count + estimated size across all closed listings. One
+// click deletes every photo from closed deals (keeps NWMLS printouts and
+// other documents). Deletes from Supabase Storage AND from the transaction's
+// documents array.
+function ClosedPhotoCleanupButton({ transactions, onUpdate }) {
+  const [cleaning, setCleaning] = useState(false);
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
+
+  // Count photos and estimate size across all closed listings
+  const stats = useMemo(() => {
+    let count = 0;
+    let bytes = 0;
+    for (const t of transactions) {
+      for (const d of (t.documents || [])) {
+        if (d.section === "photo") {
+          count++;
+          bytes += d.size || 0;
+        }
+      }
+    }
+    return { count, bytes };
+  }, [transactions]);
+
+  if (stats.count === 0) return null;
+
+  const handleCleanup = async () => {
+    const msg = `Delete all ${stats.count} photos from your closed listings? This will free about ${formatFileSize(stats.bytes)} of storage.\n\nNWMLS printouts and other documents will be kept.\n\nThis cannot be undone.`;
+    if (!confirm(msg)) return;
+
+    setCleaning(true);
+    const total = stats.count;
+    setProgress({ current: 0, total });
+    let done = 0;
+
+    try {
+      for (const t of transactions) {
+        const photoDocs = (t.documents || []).filter(d => d.section === "photo");
+        if (photoDocs.length === 0) continue;
+
+        // Delete each photo blob from Supabase Storage first
+        for (const doc of photoDocs) {
+          const docWasCloud = doc.cloud === true || doc.cloud === undefined;
+          try {
+            await removeDocumentBlob(doc.id, docWasCloud);
+          } catch (e) {
+            console.error("Failed to delete blob for", doc.id, e);
+          }
+          done++;
+          setProgress({ current: done, total });
+        }
+
+        // Then update the transaction with photos removed
+        const remaining = (t.documents || []).filter(d => d.section !== "photo");
+        await onUpdate({ ...t, documents: remaining });
+      }
+      alert(`✓ Done — ${total} photos removed. Storage will update in your Supabase dashboard shortly.`);
+    } catch (e) {
+      alert(`Cleanup partially failed: ${e.message}\n\nSome photos may not have been removed. Try again or clean up manually.`);
+    } finally {
+      setCleaning(false);
+      setProgress({ current: 0, total: 0 });
+    }
+  };
+
+  return (
+    <div style={{
+      marginBottom: 20, padding: "12px 16px",
+      background: "var(--paper-soft)",
+      border: "1px solid var(--ink-line)",
+      borderRadius: 10,
+      display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+    }}>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>
+          📦 Storage cleanup available
+        </div>
+        <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+          {stats.count} photo{stats.count === 1 ? "" : "s"} across closed listings — ~{formatFileSize(stats.bytes)} of storage.
+          NWMLS printouts and documents stay.
+        </div>
+      </div>
+      <button
+        onClick={handleCleanup}
+        disabled={cleaning}
+        style={{
+          padding: "10px 16px", borderRadius: 6, border: "none",
+          background: cleaning ? "var(--ink-soft)" : "var(--accent)",
+          color: "#fff", fontSize: 13, fontWeight: 500,
+          cursor: cleaning ? "default" : "pointer",
+          display: "flex", alignItems: "center", gap: 6,
+        }}
+      >
+        {cleaning
+          ? <><Loader2 size={14} className="spin" /> Deleting {progress.current}/{progress.total}…</>
+          : <><Trash2 size={14} /> Clean up photos</>}
+      </button>
+    </div>
   );
 }
 

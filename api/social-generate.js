@@ -278,39 +278,36 @@ If making multiple separate posts, join them with "\\n\\n═══════�
 // fetch NWMLS data, photos, and generate image overlays when the user asks
 // for them.
 async function doChat({ messages, activeListings }) {
-  const listingSummary = (activeListings && activeListings.length > 0)
-    ? "\n\nACTIVE LISTINGS AVAILABLE:\n" + activeListings.map((l, i) =>
-        `${i + 1}. ${l.address || "(no address)"}${l.city ? `, ${l.city}` : ""}`
-        + (l.listPrice ? ` — $${Number(l.listPrice).toLocaleString()}` : "")
-        + (l.beds || l.baths ? ` — ${l.beds || "?"}bd/${l.baths || "?"}ba` : "")
-        + ` (NWMLS: ${l.hasNwmls ? "yes" : "no"}, photos: ${l.photoCount || 0})`
+  const listingLines = (activeListings && activeListings.length > 0)
+    ? activeListings.map((l, i) =>
+        `${i + 1}. ${l.address || "(no address)"}${l.city ? `, ${l.city}` : ""}${l.listPrice ? ` ($${Number(l.listPrice).toLocaleString()})` : ""}`
       ).join("\n")
-    : "";
+    : "(none in the app yet)";
 
-  const system = `You are a social-media copywriter for The Jesse Cope Team real estate in Longview / Cowlitz County, WA. You write Facebook and Instagram posts in Jesse's voice.
+  // Keep the system prompt SHORT and purely directive.
+  const system = `You write Facebook and Instagram posts for Jesse Cope, a real estate broker at RE/MAX Premier Group in Longview, WA.
 
-${STYLE_GUIDE}
+Jesse's active listings:
+${listingLines}
 
-Your job: write the post Jesse asks for, every time, no matter what. Return just the post text — no preambles, no quotes, no commentary. Just the finished post.
+RULES:
+- When Jesse messages you, write him a social media post. Always.
+- Match addresses loosely (so "1745 23rd" matches "1745 23rd Avenue").
+- If you don't have a detail (price, sqft, etc.), use [brackets] so Jesse can fill it in.
+- Style: ALL-CAPS headline, warm friendly tone, emoji accents, 6-10 hashtags at the end for Longview/Cowlitz County.
+- Length: 120-250 words.
+- Team contact (include when it fits): Jesse 360-431-5915 / Mercedes 360-355-0646.
+- Return ONLY the post text, no preambles, no "here's your post", no quotes around it.
 
-When Jesse mentions a listing address, match it loosely to the listings below (so "1745 23rd" matches "1745 23rd Avenue"). Use the real address, price, beds/baths, sqft from the match. If no listing in the list matches the address Jesse mentions, write the post anyway using [brackets] where specifics are missing — like "[price]" or "[bedrooms]" — so Jesse can fill in the blanks himself.
+For follow-ups like "make it shorter" — rewrite the previous post with those tweaks.`;
 
-If Jesse asks for several things in one message (fall-themed post AND advertising 1745 23rd, for example), weave them together into one post.
-
-For follow-up requests like "make it shorter" or "more casual" or "swap the opening", rewrite the previous post with those changes.
-
-If Jesse asks for a graphic, image, or photo overlay: write him a strong text post, then add at the very end: "(Branded image overlays coming in a future update.)"
-
-If Jesse just chats or asks a question, answer briefly and conversationally.${listingSummary}`;
-
-  // Trim conversation to the last 20 messages so we don't blow up tokens
   const trimmed = (messages || []).slice(-20).map(m => ({
     role: m.role,
     content: m.content,
   }));
 
   if (trimmed.length === 0) {
-    return { reply: "What would you like me to post about?" };
+    return { reply: "What would you like me to post about?", post: "What would you like me to post about?" };
   }
 
   const text = await callClaude({
@@ -319,7 +316,19 @@ If Jesse just chats or asks a question, answer briefly and conversationally.${li
     messages: trimmed,
   });
 
-  return { reply: text.trim(), post: text.trim() };
+  const cleaned = (text || "").trim();
+
+  // If Claude truly returned nothing (should be rare), surface that clearly
+  // rather than letting the UI show an empty bubble.
+  if (!cleaned) {
+    return {
+      reply: "Claude returned an empty response. Please try again or rephrase your request.",
+      post: "Claude returned an empty response. Please try again or rephrase your request.",
+      _debug: "empty response from Claude",
+    };
+  }
+
+  return { reply: cleaned, post: cleaned };
 }
 
 // ───── Main handler ────────────────────────────────────────────────────

@@ -291,15 +291,17 @@ async function doChat({ messages, activeListings }) {
 
 ${STYLE_GUIDE}
 
-HOW TO HANDLE REQUESTS:
-- When Jesse asks for a post, write the post. Return just the post text — no "here's your post:" preambles, no quotes around it, no commentary about what you did. Just the post.
-- Jesse may ask for multiple things in one message (e.g., "write about fall AND advertise 1745 23rd"). Combine them naturally into one post, or make a logical blend. Don't refuse.
-- When Jesse mentions a listing address, match it loosely against the active listings below. "1745 23rd" matches "1745 23rd Avenue" — use common sense. If you find a match, use the address, price, bed/bath count. If you can't find any listing with those keywords, STILL WRITE THE POST — use [brackets] for the price/details you don't have, so Jesse can fill them in.
-- NEVER respond with "no post, try rewording" or similar refusals. Always do your best to help.
-- If Jesse chats casually or asks a question, respond conversationally and briefly.
-- For follow-up iterations ("make it shorter", "more casual", "use a different hook"), rewrite the previous post with those changes.
+Your job: write the post Jesse asks for, every time, no matter what. Return just the post text — no preambles, no quotes, no commentary. Just the finished post.
 
-ABOUT IMAGES: Image generation and photo overlays are coming in a future update. For now, if Jesse asks for a graphic with text on a photo, write him a great text post and briefly note at the end: "(Image overlays coming soon — for now, pair this with your Canva graphic.)"${listingSummary}`;
+When Jesse mentions a listing address, match it loosely to the listings below (so "1745 23rd" matches "1745 23rd Avenue"). Use the real address, price, beds/baths, sqft from the match. If no listing in the list matches the address Jesse mentions, write the post anyway using [brackets] where specifics are missing — like "[price]" or "[bedrooms]" — so Jesse can fill in the blanks himself.
+
+If Jesse asks for several things in one message (fall-themed post AND advertising 1745 23rd, for example), weave them together into one post.
+
+For follow-up requests like "make it shorter" or "more casual" or "swap the opening", rewrite the previous post with those changes.
+
+If Jesse asks for a graphic, image, or photo overlay: write him a strong text post, then add at the very end: "(Branded image overlays coming in a future update.)"
+
+If Jesse just chats or asks a question, answer briefly and conversationally.${listingSummary}`;
 
   // Trim conversation to the last 20 messages so we don't blow up tokens
   const trimmed = (messages || []).slice(-20).map(m => ({

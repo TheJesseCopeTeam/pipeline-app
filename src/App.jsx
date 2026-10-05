@@ -1660,7 +1660,7 @@ function MainApp({ user }) {
             }}
           />
         ) : view === "social" ? (
-          <SocialMediaTab />
+          <SocialMediaTab transactions={transactions} isCloud={isCloud} />
         ) : (
           <>
             <div style={styles.searchBar}>
@@ -8519,16 +8519,44 @@ function socialFileToBase64(file) {
   });
 }
 
-function SocialMediaTab() {
-  const [mode, setMode] = useState("random");
+function SocialMediaTab({ transactions = [], isCloud = false }) {
+  // "my_listings" is the new default mode. Others are the originals.
+  const [mode, setMode] = useState("my_listings");
   const [postType, setPostType] = useState("surprise");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState(null);
+  // Listings selected manually (set of listing IDs). If empty, we send the
+  // user's natural-language text to the backend and let it figure out which.
+  const [selectedListingIds, setSelectedListingIds] = useState(new Set());
+  const [userInput, setUserInput] = useState("");
   const [result, setResult] = useState("");
+  const [selectedPhotoUrls, setSelectedPhotoUrls] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Active listings only — the kinds you'd want to promote on social media.
+  // Each gets enriched with NWMLS/photo info so cards can show badges.
+  const activeListings = useMemo(() => {
+    return (transactions || [])
+      .filter(t => t.type === "listing" && isActiveStage(t))
+      .map(t => {
+        const docs = t.documents || [];
+        const hasNwmls = docs.some(d => d.section === "nwmls");
+        const photos = docs.filter(d => d.section === "photo");
+        return { txn: t, hasNwmls, photoCount: photos.length };
+      })
+      .sort((a, b) => (a.txn.address || "").localeCompare(b.txn.address || ""));
+  }, [transactions]);
+
+  const toggleListingSelected = (id) => {
+    setSelectedListingIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   // Brand palette (matches the original SocialMediaTab file)
   const C = {
@@ -8539,13 +8567,48 @@ function SocialMediaTab() {
   const serif = "Cambria, Georgia, 'Times New Roman', serif";
 
   async function generate() {
-    setError(""); setCopied(""); setLoading(true);
+    setError(""); setCopied(""); setLoading(true); setResult(""); setSelectedPhotoUrls([]);
     try {
       let body;
       if (mode === "listing") {
         if (!file) throw new Error("Upload an MLS listing sheet (PDF) first.");
         const pdfBase64 = await socialFileToBase64(file);
         body = { mode: "listing", pdfBase64, notes };
+      } else if (mode === "my_listings") {
+        // Build listing payload. If user tapped specific listings, use those.
+        // Otherwise send ALL active listings and let the backend pick based on
+        // the user's natural-language text.
+        const listingsToSend = selectedListingIds.size > 0
+          ? activeListings.filter(l => selectedListingIds.has(l.txn.id))
+          : activeListings;
+
+        if (listingsToSend.length === 0) {
+          throw new Error("No active listings available. Create a listing first.");
+        }
+        if (!userInput.trim() && selectedListingIds.size === 0) {
+          throw new Error("Tell me what to make — like \"a roundup post of my active listings\" or tap specific listings above.");
+        }
+
+        // For the backend: send only the metadata it needs to decide. Signed
+        // URLs for files are generated server-side using service role.
+        body = {
+          mode: "my_listings",
+          userInput: userInput.trim(),
+          notes,
+          listings: listingsToSend.map(l => ({
+            id: l.txn.id,
+            address: l.txn.address || "",
+            city: l.txn.city || "",
+            state: l.txn.state || "",
+            zip: l.txn.zip || "",
+            listPrice: l.txn.listPrice || l.txn.price || "",
+            beds: l.txn.beds, baths: l.txn.baths, sqft: l.txn.sqft,
+            // IDs of docs the backend should pull signed URLs for
+            nwmlsDocIds: (l.txn.documents || []).filter(d => d.section === "nwmls").map(d => d.id),
+            photoDocIds: (l.txn.documents || []).filter(d => d.section === "photo").map(d => d.id),
+            coverPhotoId: ((l.txn.documents || []).find(d => d.section === "photo" && d.isCover) || {}).id,
+          })),
+        };
       } else {
         body = { mode: "random", postType, notes };
       }
@@ -8557,10 +8620,31 @@ function SocialMediaTab() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Generation failed.");
       setResult(data.post || "");
+      // Backend may return photo URLs it picked for the post
+      setSelectedPhotoUrls(Array.isArray(data.photoUrls) ? data.photoUrls : []);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Download the AI-picked photos as individual files via tabs/downloads.
+  // (Full zip bundling is Phase 4.)
+  async function downloadPhotos() {
+    if (!selectedPhotoUrls || selectedPhotoUrls.length === 0) return;
+    for (let i = 0; i < selectedPhotoUrls.length; i++) {
+      const url = selectedPhotoUrls[i];
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `photo-${i + 1}.jpg`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Small delay so browser doesn't block multi-downloads
+      await new Promise(r => setTimeout(r, 200));
     }
   }
 
@@ -8616,20 +8700,98 @@ function SocialMediaTab() {
       <h1 style={s.h1}>Social Media</h1>
       <p style={s.sub}>Fresh, on-brand posts for Facebook &amp; Instagram — in seconds.</p>
 
-      <div style={s.toggleRow}>
+      <div style={{ ...s.toggleRow, flexWrap: "wrap" }}>
+        <button style={s.toggle(mode === "my_listings")} onClick={() => setMode("my_listings")}>My listings</button>
         <button style={s.toggle(mode === "random")} onClick={() => setMode("random")}>Random post</button>
         <button style={s.toggle(mode === "listing")} onClick={() => setMode("listing")}>From MLS sheet</button>
       </div>
 
       <div style={s.card}>
-        {mode === "random" ? (
+        {mode === "my_listings" && (
+          <>
+            <label style={s.label}>Pick listings (or just describe what you want)</label>
+            {activeListings.length === 0 ? (
+              <div style={{ padding: "16px 10px", color: C.taupe, fontStyle: "italic", textAlign: "center" }}>
+                No active listings yet. Create one to use this mode.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                {activeListings.map(l => {
+                  const selected = selectedListingIds.has(l.txn.id);
+                  return (
+                    <button
+                      key={l.txn.id}
+                      onClick={() => toggleListingSelected(l.txn.id)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 12,
+                        padding: "10px 14px", borderRadius: 10,
+                        border: `1px solid ${selected ? C.charcoal : C.line}`,
+                        background: selected ? C.cream : "#fff",
+                        color: C.ink, fontFamily: serif, fontSize: 14,
+                        cursor: "pointer", textAlign: "left",
+                      }}>
+                      <div style={{
+                        width: 20, height: 20, borderRadius: 4,
+                        border: `1.5px solid ${selected ? C.charcoal : C.taupeLight}`,
+                        background: selected ? C.charcoal : "#fff",
+                        color: C.cream, fontSize: 14,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        flexShrink: 0,
+                      }}>
+                        {selected ? "✓" : ""}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, color: C.charcoal, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {l.txn.address || "(no address)"}
+                        </div>
+                        <div style={{ fontSize: 12, color: C.taupe, marginTop: 2 }}>
+                          {[l.txn.city, l.txn.state].filter(Boolean).join(", ")}
+                          {l.txn.listPrice && ` · $${Number(l.txn.listPrice).toLocaleString()}`}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                        {l.hasNwmls && (
+                          <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 10, background: "#dff0d8", color: "#3c763d", fontWeight: 600 }}>
+                            ✓ NWMLS
+                          </span>
+                        )}
+                        {!l.hasNwmls && (
+                          <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 10, background: "#f5e8d9", color: "#8a6d3b", fontWeight: 500 }}>
+                            No NWMLS
+                          </span>
+                        )}
+                        <span style={{ fontSize: 11, padding: "2px 7px", borderRadius: 10, background: C.cream, color: C.ink, fontWeight: 500 }}>
+                          📷 {l.photoCount}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <label style={s.label}>Or just type what you want</label>
+            <textarea style={s.textarea}
+              placeholder={'e.g. "create a social media post with all my active listings" or "make a post for the 23rd and Bond listings"'}
+              value={userInput} onChange={(e) => setUserInput(e.target.value)} />
+            <p style={s.hint}>
+              {selectedListingIds.size > 0
+                ? `${selectedListingIds.size} listing${selectedListingIds.size === 1 ? "" : "s"} selected. Your text adds direction.`
+                : "Tap listings above OR describe what you want — the AI will figure it out."}
+            </p>
+          </>
+        )}
+
+        {mode === "random" && (
           <>
             <label style={s.label}>Post type</label>
             <select style={s.select} value={postType} onChange={(e) => setPostType(e.target.value)}>
               {SOCIAL_POST_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
           </>
-        ) : (
+        )}
+
+        {mode === "listing" && (
           <>
             <label style={s.label}>MLS listing sheet (PDF)</label>
             <div style={s.dropZone} onClick={() => fileInputRef.current?.click()}>
@@ -8640,11 +8802,15 @@ function SocialMediaTab() {
           </>
         )}
 
-        <label style={s.label}>Extra direction (optional)</label>
-        <textarea style={s.textarea}
-          placeholder={mode === "listing" ? "e.g. emphasize the shop and RV parking; keep it short" : "e.g. tie it to hunting season; keep it upbeat"}
-          value={notes} onChange={(e) => setNotes(e.target.value)} />
-        <p style={s.hint}>Numbers like rates or prices are never invented — the post will use [brackets] for you to fill in unless they're on the sheet.</p>
+        {mode !== "my_listings" && (
+          <>
+            <label style={s.label}>Extra direction (optional)</label>
+            <textarea style={s.textarea}
+              placeholder={mode === "listing" ? "e.g. emphasize the shop and RV parking; keep it short" : "e.g. tie it to hunting season; keep it upbeat"}
+              value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <p style={s.hint}>Numbers like rates or prices are never invented — the post will use [brackets] for you to fill in unless they're on the sheet.</p>
+          </>
+        )}
       </div>
 
       <button style={s.genBtn} onClick={generate} disabled={loading}>
@@ -8657,8 +8823,28 @@ function SocialMediaTab() {
         <div style={s.resultCard}>
           <label style={s.label}>Your post — edit freely</label>
           <textarea style={s.resultText} value={result} onChange={(e) => setResult(e.target.value)} />
+          {selectedPhotoUrls.length > 0 && (
+            <div style={{ marginTop: 10, padding: 10, background: C.cream, borderRadius: 8 }}>
+              <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, marginBottom: 6 }}>
+                📷 {selectedPhotoUrls.length} photo{selectedPhotoUrls.length === 1 ? "" : "s"} picked
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {selectedPhotoUrls.slice(0, 8).map((u, i) => (
+                  <img key={i} src={u} alt="" style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 4, border: `1px solid ${C.line}` }} />
+                ))}
+                {selectedPhotoUrls.length > 8 && (
+                  <div style={{ width: 60, height: 60, display: "flex", alignItems: "center", justifyContent: "center", color: C.taupe, border: `1px solid ${C.line}`, borderRadius: 4, fontSize: 12 }}>
+                    +{selectedPhotoUrls.length - 8}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div style={s.actionRow}>
             <button style={s.smallBtn(true)} onClick={copyResult}>{copied ? "✓ Copied!" : "Copy post"}</button>
+            {selectedPhotoUrls.length > 0 && (
+              <button style={s.smallBtn(false)} onClick={downloadPhotos}>↓ Download photos</button>
+            )}
             <button style={s.smallBtn(false)} onClick={generate} disabled={loading}>↻ Regenerate</button>
           </div>
         </div>

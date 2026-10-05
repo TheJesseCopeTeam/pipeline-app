@@ -272,6 +272,52 @@ If making multiple separate posts, join them with "\\n\\n═══════�
   return { post: parsed.post.trim(), photoUrls };
 }
 
+// ───── Mode: chat (Phase A — text only, listing-aware context) ─────────
+// The frontend sends the running conversation plus a list of active listings
+// as lightweight context. Claude replies in Jesse's voice. Phases B+ will
+// fetch NWMLS data, photos, and generate image overlays when the user asks
+// for them.
+async function doChat({ messages, activeListings }) {
+  const listingSummary = (activeListings && activeListings.length > 0)
+    ? "\n\nACTIVE LISTINGS AVAILABLE:\n" + activeListings.map((l, i) =>
+        `${i + 1}. ${l.address || "(no address)"}${l.city ? `, ${l.city}` : ""}`
+        + (l.listPrice ? ` — $${Number(l.listPrice).toLocaleString()}` : "")
+        + (l.beds || l.baths ? ` — ${l.beds || "?"}bd/${l.baths || "?"}ba` : "")
+        + ` (NWMLS: ${l.hasNwmls ? "yes" : "no"}, photos: ${l.photoCount || 0})`
+      ).join("\n")
+    : "";
+
+  const system = `You are a social-media copywriter and assistant for The Jesse Cope Team real estate in Longview / Cowlitz County, WA. You help Jesse create posts for Facebook and Instagram.
+
+${STYLE_GUIDE}
+
+When Jesse asks for a post, write it in his voice. Return just the post text — no "here's your post:" preambles, no bullet points about what you did, no quotes around it. Just the post itself.
+
+When Jesse asks a question or wants to brainstorm, respond conversationally and keep it short.
+
+When Jesse mentions an address, check if it matches one of his active listings below. If yes, use it. If not, politely say you don't see that listing and ask him to confirm the address.${listingSummary}
+
+Important: We are in Phase A — you only generate text posts for now. In coming phases we'll pull the full NWMLS printout, fetch photos, and generate branded graphics. For now, if Jesse asks for images, graphics, or price overlays, write a great text post and gently note that image generation is coming in a later update.`;
+
+  // Trim conversation to the last 20 messages so we don't blow up tokens
+  const trimmed = (messages || []).slice(-20).map(m => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  if (trimmed.length === 0) {
+    return { reply: "What would you like me to post about?" };
+  }
+
+  const text = await callClaude({
+    system,
+    max_tokens: 1500,
+    messages: trimmed,
+  });
+
+  return { reply: text.trim(), post: text.trim() };
+}
+
 // ───── Main handler ────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -282,6 +328,10 @@ export default async function handler(req, res) {
     const body = req.body || {};
     const { mode } = body;
 
+    if (mode === "chat") {
+      const out = await doChat(body);
+      return res.status(200).json(out);
+    }
     if (mode === "random") {
       const out = await doRandom(body);
       return res.status(200).json(out);

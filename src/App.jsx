@@ -8711,6 +8711,9 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         // Phase B: send NWMLS printout doc IDs so backend can fetch the PDF
         // when Jesse mentions this listing
         nwmlsDocIds: (t.documents || []).filter(d => d.section === "nwmls").map(d => d.id),
+        // Phase C: send photo doc IDs + cover for photo attachments
+        photoDocIds: (t.documents || []).filter(d => d.section === "photo").map(d => d.id),
+        coverPhotoId: ((t.documents || []).find(d => d.section === "photo" && d.isCover) || {}).id || null,
       }));
 
       const res = await fetch("/api/social-generate", {
@@ -8729,6 +8732,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         id: newId(),
         role: "assistant",
         content: data.post || data.reply || "",
+        // Phase C: photos the backend returned for this response (signed URLs)
+        photos: Array.isArray(data.photos) ? data.photos : [],
         ts: Date.now(),
       };
       setMessages(prev => [...prev, assistantMsg]);
@@ -8832,6 +8837,24 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
               ) : (
                 <div style={s.aiBubble}>
                   {m.content}
+                  {Array.isArray(m.photos) && m.photos.length > 0 && (
+                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+                      <div style={{ fontSize: 11, color: C.taupe, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        \ud83d\udcf7 Photos from the listing{m.photos.length > 1 ? "s" : ""}
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {m.photos.map((p, i) => (
+                          <div key={i} style={{ position: "relative", width: 100, height: 100, borderRadius: 6, overflow: "hidden", border: `1px solid ${C.line}` }}>
+                            <img src={p.url} alt={p.address || "listing photo"} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                            <a href={p.url} download={`photo-${i + 1}.jpg`} target="_blank" rel="noopener noreferrer"
+                               style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "4px 6px", background: "rgba(0,0,0,0.6)", color: "#fff", fontSize: 10, textAlign: "center", textDecoration: "none" }}>
+                              Download
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div style={s.aiActions}>
                     <button style={s.smallBtn} onClick={() => copyMessage(m)}>
                       {copiedId === m.id ? "\u2713 Copied" : "Copy post"}

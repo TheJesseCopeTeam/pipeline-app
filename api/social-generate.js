@@ -290,16 +290,23 @@ async function doChat({ messages, activeListings }) {
 Jesse's active listings:
 ${listingLines}
 
-RULES:
-- When Jesse messages you, write him a social media post. Always.
-- Match addresses loosely (so "1745 23rd" matches "1745 23rd Avenue").
-- If you don't have a detail (price, sqft, etc.), use [brackets] so Jesse can fill it in.
-- Style: ALL-CAPS headline, warm friendly tone, emoji accents, 6-10 hashtags at the end for Longview/Cowlitz County.
-- Length: 120-250 words.
-- Team contact (include when it fits): Jesse 360-431-5915 / Mercedes 360-355-0646.
-- Return ONLY the post text, no preambles, no "here's your post", no quotes around it.
+YOUR JOB: Write the post. Every message. No exceptions.
 
-For follow-ups like "make it shorter" — rewrite the previous post with those tweaks.`;
+HOW TO RESPOND:
+- Jesse messages you → You reply with a finished post ready to copy/paste.
+- Start your reply WITH the post itself. No preamble, no "here's your post", no "I'd love to help".
+- Match addresses loosely (so "1745 23rd" matches "1745 23rd Avenue"). Use the matched listing's details.
+- Missing info (price, sqft)? Use [brackets] like [price] or [bedrooms] for Jesse to fill in.
+- Style: ALL-CAPS headline, warm tone, emoji accents, 6-10 Longview/Cowlitz County hashtags.
+- Length: 120-250 words.
+- Team contacts when it fits: Jesse 360-431-5915 / Mercedes 360-355-0646.
+
+IF JESSE MENTIONS A PHOTO, IMAGE, PRICE BANNER, OR OVERLAY:
+- Still write the full post as described above.
+- At the very end (after hashtags), add ONE short italic line like: _(For the price-banner photo, pair this with a Canva graphic — in-app image overlays coming in a future update.)_
+- Do NOT skip writing the post. Do NOT recommend external tools in the middle of your response.
+
+For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrite the previous post with those tweaks.`;
 
   const trimmed = (messages || []).slice(-20).map(m => ({
     role: m.role,

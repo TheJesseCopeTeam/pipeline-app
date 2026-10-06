@@ -8634,7 +8634,30 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
   // /api/social-generate with mode="chat" along with the running conversation.
   // Phase A: text-only generation. Phases B+ will add listing lookup, photos,
   // image overlays, iteration logic, and photo upload.
-  const [messages, setMessages] = useState([]);
+  // Chat persistence — messages are kept in localStorage so switching away
+  // from the Social Media tab (or refreshing) doesn't wipe the conversation.
+  // Only cleared when the user clicks "+ New chat".
+  const CHAT_STORAGE_KEY = "jct_social_chat_v1";
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  // Persist whenever messages change (debounced via effect)
+  useEffect(() => {
+    try {
+      if (messages.length === 0) {
+        localStorage.removeItem(CHAT_STORAGE_KEY);
+      } else {
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+      }
+    } catch (e) {}
+  }, [messages]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");

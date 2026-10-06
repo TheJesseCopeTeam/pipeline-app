@@ -277,6 +277,60 @@ If making multiple separate posts, join them with "\\n\\n═══════�
 // as lightweight context. Claude replies in Jesse's voice. Phases B+ will
 // fetch NWMLS data, photos, and generate image overlays when the user asks
 // for them.
+// Phase B helpers: find listings mentioned in the user's latest message,
+// then attach their NWMLS printout PDFs to the Claude call so Claude can
+// pull real details (lot size, features, remarks) instead of guessing.
+
+// Loose matching: a listing is "mentioned" if any 2+ consecutive words from
+// its address appear in the message, OR if the street number appears as a
+// standalone token (common shorthand like "1745").
+function findMentionedListings(text, listings) {
+  if (!text || !Array.isArray(listings)) return [];
+  const lowered = String(text).toLowerCase();
+  const found = [];
+  for (const l of listings) {
+    if (!l.address) continue;
+    const addr = String(l.address).toLowerCase();
+    const parts = addr.split(/\s+/).filter(Boolean);
+    let hit = false;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const bigram = `${parts[i]} ${parts[i + 1]}`;
+      if (lowered.includes(bigram)) { hit = true; break; }
+    }
+    if (!hit && parts[0] && /^\d+$/.test(parts[0])) {
+      const re = new RegExp(`\\b${parts[0]}\\b`);
+      if (re.test(lowered)) hit = true;
+    }
+    if (hit) found.push(l);
+  }
+  return found;
+}
+
+// Fetch signed URLs for the NWMLS printouts of mentioned listings so Claude
+// can read them as PDF documents.
+async function fetchNwmlsAttachments(mentionedListings) {
+  if (!mentionedListings || mentionedListings.length === 0) return [];
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  if (!serviceRoleKey || !supabaseUrl) return [];
+
+  const txnIds = mentionedListings.map(l => l.id);
+  const ownerIds = await getOwnerIdByTxn(serviceRoleKey, supabaseUrl, txnIds);
+
+  const results = [];
+  for (const l of mentionedListings) {
+    const ownerId = ownerIds[l.id];
+    if (!ownerId) continue;
+    const docIds = Array.isArray(l.nwmlsDocIds) ? l.nwmlsDocIds : [];
+    if (docIds.length === 0) continue;
+    // Use the first NWMLS printout per listing (usually only one)
+    const docId = docIds[0];
+    const url = await signedUrl(serviceRoleKey, supabaseUrl, `${ownerId}/${docId}`);
+    if (url) results.push({ listingId: l.id, address: l.address, url });
+  }
+  return results;
+}
+
 async function doChat({ messages, activeListings }) {
   const listingLines = (activeListings && activeListings.length > 0)
     ? activeListings.map((l, i) =>
@@ -312,6 +366,37 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     role: m.role,
     content: m.content,
   }));
+
+  // Phase B: Find listings mentioned in the latest user message and attach
+  // their NWMLS printout PDFs so Claude has the real details to work with.
+  const lastUserMsg = [...trimmed].reverse().find(m => m.role === "user");
+  const lastText = lastUserMsg?.content || "";
+  const mentioned = findMentionedListings(lastText, activeListings);
+  const attachments = await fetchNwmlsAttachments(mentioned);
+
+  // If we have NWMLS attachments, convert the LAST user message into a
+  // multimodal message with the PDF(s) attached. The rest of the history
+  // stays as plain text (previous turns' context carries forward through
+  // Claude's own responses).
+  if (attachments.length > 0 && trimmed.length > 0) {
+    const lastIdx = trimmed.length - 1;
+    const lastMsg = trimmed[lastIdx];
+    if (lastMsg.role === "user" && typeof lastMsg.content === "string") {
+      const noteLines = attachments.map(a =>
+        `Attached: NWMLS printout for ${a.address}.`
+      ).join("\n");
+      trimmed[lastIdx] = {
+        role: "user",
+        content: [
+          { type: "text", text: `${lastMsg.content}\n\n${noteLines}\n(Pull real details — price, beds/baths, sqft, lot, features, listing remarks — from the attached printout(s). Do not invent anything.)` },
+          ...attachments.map(a => ({
+            type: "document",
+            source: { type: "url", url: a.url },
+          })),
+        ],
+      };
+    }
+  }
 
   if (trimmed.length === 0) {
     return { reply: "What would you like me to post about?", post: "What would you like me to post about?" };

@@ -1668,6 +1668,15 @@ function MainApp({ user }) {
               <input type="text" placeholder="Search by address, party, or city…"
                 value={search} onChange={(e) => setSearch(e.target.value)} style={styles.searchInput} />
             </div>
+            {/* Cleanup button only on Closed tab — bulk-deletes photos from
+                closed listings to free Supabase storage. Keeps NWMLS printouts
+                and other documents. */}
+            {view === "closed" && isCloud && filtered.some(t => (t.documents || []).some(d => d.section === "photo")) && (
+              <ClosedPhotoCleanupButton
+                transactions={filtered}
+                onUpdate={async (txn) => { await handleSave(txn); }}
+              />
+            )}
             {filtered.length === 0 ? (
               <EmptyState type={view} onCreate={() => setEditing(newTransaction(view === "buyers" ? "buyer" : "listing"))} />
             ) : (
@@ -3423,6 +3432,107 @@ function TransactionCard({ txn, onClick }) {
         </div>
       </div>
     </button>
+  );
+}
+
+// ─── Closed photos cleanup ──────────────────────────────────────────────
+// Shows total photo count + estimated size across all closed listings. One
+// click deletes every photo from closed deals (keeps NWMLS printouts and
+// other documents). Deletes from Supabase Storage AND from the transaction's
+// documents array.
+function ClosedPhotoCleanupButton({ transactions, onUpdate }) {
+  const [cleaning, setCleaning] = useState(false);
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
+
+  // Count photos and estimate size across all closed listings
+  const stats = useMemo(() => {
+    let count = 0;
+    let bytes = 0;
+    for (const t of transactions) {
+      for (const d of (t.documents || [])) {
+        if (d.section === "photo") {
+          count++;
+          bytes += d.size || 0;
+        }
+      }
+    }
+    return { count, bytes };
+  }, [transactions]);
+
+  if (stats.count === 0) return null;
+
+  const handleCleanup = async () => {
+    const msg = `Delete all ${stats.count} photos from your closed listings? This will free about ${formatFileSize(stats.bytes)} of storage.\n\nNWMLS printouts and other documents will be kept.\n\nThis cannot be undone.`;
+    if (!confirm(msg)) return;
+
+    setCleaning(true);
+    const total = stats.count;
+    setProgress({ current: 0, total });
+    let done = 0;
+
+    try {
+      for (const t of transactions) {
+        const photoDocs = (t.documents || []).filter(d => d.section === "photo");
+        if (photoDocs.length === 0) continue;
+
+        // Delete each photo blob from Supabase Storage first
+        for (const doc of photoDocs) {
+          const docWasCloud = doc.cloud === true || doc.cloud === undefined;
+          try {
+            await removeDocumentBlob(doc.id, docWasCloud);
+          } catch (e) {
+            console.error("Failed to delete blob for", doc.id, e);
+          }
+          done++;
+          setProgress({ current: done, total });
+        }
+
+        // Then update the transaction with photos removed
+        const remaining = (t.documents || []).filter(d => d.section !== "photo");
+        await onUpdate({ ...t, documents: remaining });
+      }
+      alert(`✓ Done — ${total} photos removed. Storage will update in your Supabase dashboard shortly.`);
+    } catch (e) {
+      alert(`Cleanup partially failed: ${e.message}\n\nSome photos may not have been removed. Try again or clean up manually.`);
+    } finally {
+      setCleaning(false);
+      setProgress({ current: 0, total: 0 });
+    }
+  };
+
+  return (
+    <div style={{
+      marginBottom: 20, padding: "12px 16px",
+      background: "var(--paper-soft)",
+      border: "1px solid var(--ink-line)",
+      borderRadius: 10,
+      display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+    }}>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>
+          📦 Storage cleanup available
+        </div>
+        <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
+          {stats.count} photo{stats.count === 1 ? "" : "s"} across closed listings — ~{formatFileSize(stats.bytes)} of storage.
+          NWMLS printouts and documents stay.
+        </div>
+      </div>
+      <button
+        onClick={handleCleanup}
+        disabled={cleaning}
+        style={{
+          padding: "10px 16px", borderRadius: 6, border: "none",
+          background: cleaning ? "var(--ink-soft)" : "var(--accent)",
+          color: "#fff", fontSize: 13, fontWeight: 500,
+          cursor: cleaning ? "default" : "pointer",
+          display: "flex", alignItems: "center", gap: 6,
+        }}
+      >
+        {cleaning
+          ? <><Loader2 size={14} className="spin" /> Deleting {progress.current}/{progress.total}…</>
+          : <><Trash2 size={14} /> Clean up photos</>}
+      </button>
+    </div>
   );
 }
 
@@ -6306,125 +6416,11 @@ async function removeDocumentBlob(docId, isCloud) {
       const user = await getCurrentUser();
       if (user) {
         const path = `${user.id}/${docId}`;
-        // Also remove the small preview copy if this was a photo
-        await supabase.storage.from(STORAGE_BUCKET).remove([path, `${path}_preview`]);
+        await supabase.storage.from(STORAGE_BUCKET).remove([path]);
       }
     } catch (e) { /* swallow */ }
   }
   try { localStorage.removeItem(DOC_BLOB_PREFIX + docId); } catch (e) {}
-}
-
-// ─── Listing file sections ────────────────────────────────────────────────
-// Listing transactions sort their files into three sections. The Social Media
-// tab reads the NWMLS printout + photos from here.
-const DOC_CATEGORIES = [
-  {
-    id: "nwmls", short: "NWMLS", icon: "🏷", label: "NWMLS Listing Printout",
-    hint: "The NWMLS listing detail printout (PDF)",
-    accept: ".pdf,.png,.jpg,.jpeg",
-    button: "Upload NWMLS printout",
-    empty: "No NWMLS printout yet.",
-  },
-  {
-    id: "photos", short: "Photos", icon: "📷", label: "Photos",
-    hint: "JPG or PNG · first photo is the cover",
-    accept: "image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp",
-    button: "Upload photos",
-    empty: "No photos yet. Drag photos here or click below.",
-  },
-  {
-    id: "docs", short: "Docs", icon: "📁", label: "Documents",
-    hint: "Agreements, disclosures, anything else",
-    accept: ".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt",
-    button: "Upload documents",
-    empty: "No documents yet.",
-  },
-];
-
-// Older files (uploaded before sections existed) have no category:
-// images count as photos, everything else as documents.
-function docCategory(doc) {
-  if (doc.category && DOC_CATEGORIES.some(c => c.id === doc.category)) return doc.category;
-  return doc.type?.startsWith("image/") ? "photos" : "docs";
-}
-
-// Shrink a photo to a ~1280px JPEG in the browser. Returns a Blob, or null if
-// the browser can't read the image (e.g. HEIC on some browsers).
-async function makeImagePreview(file, maxDim = 1280) {
-  let url = "";
-  try {
-    url = URL.createObjectURL(file);
-    const img = await new Promise((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = () => reject(new Error("Could not read image"));
-      i.src = url;
-    });
-    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return await new Promise(resolve => canvas.toBlob(b => resolve(b), "image/jpeg", 0.82));
-  } catch (e) {
-    return null;
-  } finally {
-    if (url) URL.revokeObjectURL(url);
-  }
-}
-
-async function saveDocumentPreview(docId, blob) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) return false;
-    const { error } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .upload(`${user.id}/${docId}_preview`, blob, { upsert: true, contentType: "image/jpeg" });
-    if (error) throw error;
-    return true;
-  } catch (e) {
-    console.error("Preview upload failed:", e);
-    return false;
-  }
-}
-
-// Signed (temporary) URLs for several stored files at once.
-// `keys` are doc ids (or "<id>_preview"). Returns { key: url }.
-async function getSignedDocUrls(keys, expiresIn = 3600) {
-  const out = {};
-  if (!supabase || !keys || keys.length === 0) return out;
-  try {
-    const user = await getCurrentUser();
-    if (!user) return out;
-    const paths = keys.map(k => `${user.id}/${k}`);
-    const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrls(paths, expiresIn);
-    if (error) throw error;
-    (data || []).forEach((row, i) => {
-      if (row && row.signedUrl && !row.error) out[keys[i]] = row.signedUrl;
-    });
-  } catch (e) {
-    console.error("Signed URL batch failed:", e);
-  }
-  return out;
-}
-
-// Signed URL that makes the browser download the file under its real name.
-async function getDownloadUrl(docId, fileName) {
-  try {
-    const user = await getCurrentUser();
-    if (!user) return null;
-    const { data, error } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .createSignedUrl(`${user.id}/${docId}`, 600, { download: fileName || true });
-    if (error) throw error;
-    return data?.signedUrl || null;
-  } catch (e) {
-    console.error("Download URL failed:", e);
-    return null;
-  }
 }
 
 async function downloadDocument(doc, isCloud) {
@@ -6490,49 +6486,70 @@ function documentIcon(type, name) {
   return "📎";
 }
 
-function DocumentsSection({ txn, onUpdate, isCloud }) {
-  const [uploading, setUploading] = useState(""); // category id currently uploading, or ""
-  const [error, setError] = useState("");
-  const docs = txn.documents || [];
-  const isListing = txn.type === "listing";
-  const [thumbs, setThumbs] = useState({}); // docId -> image src for photo tiles
+// ─── File section helpers ───────────────────────────────────────────────
+// Documents in a listing transaction get sorted into one of three sections.
+// Section is auto-assigned on upload (photos go to Photos, others to Documents).
+// User can move files between sections via a dropdown on each file.
+// Section values: "nwmls" | "photo" | "doc"
+function autoSection(mimeType) {
+  if (!mimeType) return "doc";
+  if (mimeType.startsWith("image/")) return "photo";
+  return "doc";
+}
+// Backfill section on existing docs that pre-date this feature
+function withSection(doc) {
+  return { ...doc, section: doc.section || autoSection(doc.type) };
+}
 
-  // Load thumbnails for photos (signed URLs in cloud, base64 in local mode)
-  const photoKey = docs.filter(d => d.type?.startsWith("image/")).map(d => d.id + (d.hasPreview ? "p" : "")).join(",");
+// Lazy-loaded thumbnail for photos. Loads the base64 blob only when it comes
+// into view (or soon after mount) so large galleries don't block rendering.
+function PhotoThumbnail({ doc }) {
+  const [src, setSrc] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
   useEffect(() => {
-    let cancelled = false;
-    const photos = docs.filter(d => d.type?.startsWith("image/"));
-    if (photos.length === 0) { setThumbs({}); return; }
+    let active = true;
     (async () => {
-      const next = {};
-      const cloudPhotos = photos.filter(d => d.cloud === true || (d.cloud === undefined && isCloud));
-      const localPhotos = photos.filter(d => !cloudPhotos.includes(d));
-      for (const d of localPhotos) {
-        const b64 = localStorage.getItem(DOC_BLOB_PREFIX + d.id);
-        if (b64) next[d.id] = `data:${d.type};base64,${b64}`;
+      try {
+        const docWasCloud = doc.cloud === true;
+        const base64 = await loadDocumentBlob(doc.id, docWasCloud);
+        if (!active) return;
+        if (!base64) { setFailed(true); setLoading(false); return; }
+        setSrc(`data:${doc.type || "image/jpeg"};base64,${base64}`);
+        setLoading(false);
+      } catch (e) {
+        if (active) { setFailed(true); setLoading(false); }
       }
-      if (cloudPhotos.length > 0 && isCloud) {
-        const urls = await getSignedDocUrls(cloudPhotos.map(d => d.hasPreview ? `${d.id}_preview` : d.id));
-        cloudPhotos.forEach(d => {
-          const u = urls[d.hasPreview ? `${d.id}_preview` : d.id];
-          if (u) next[d.id] = u;
-        });
-      }
-      if (!cancelled) setThumbs(next);
     })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photoKey, isCloud]);
+    return () => { active = false; };
+  }, [doc.id]);
 
-  const handleFiles = async (files, category) => {
+  if (loading) return <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ink-soft)", fontSize: 10 }}>…</div>;
+  if (failed) return <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--ink-soft)", fontSize: 10 }}>?</div>;
+  return <img src={src} alt={doc.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />;
+}
+
+function DocumentsSection({ txn, onUpdate, isCloud }) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  // Backfill section field for docs that pre-date this feature
+  const docs = (txn.documents || []).map(withSection);
+  const fileInputRef = useRef(null);
+  // Track which section an upload is for (set by the per-section upload button)
+  const [uploadTargetSection, setUploadTargetSection] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+  const isListing = txn.type === "listing";
+
+  const handleFiles = async (files, targetSection = null) => {
     setError("");
     if (!files || files.length === 0) return;
 
     const totalNow = isCloud ? 0 : totalDocBytes();
     const newDocs = [];
-    setUploading(category || "docs");
+    setUploading(true);
 
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       const sizeLimit = isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE;
       if (file.size > sizeLimit) {
         setError(`"${file.name}" is too large (${formatFileSize(file.size)}). Max per file is ${formatFileSize(sizeLimit)}.`);
@@ -6547,21 +6564,12 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
       }
 
       try {
-        // Cloud uses the File directly; local needs base64.
         const base64 = isCloud ? null : await fileToBase64(file);
         const docId = newId();
         const saved = await saveDocumentBlob(docId, file, base64, isCloud);
         if (!saved) {
           setError(`Couldn't save "${file.name}".`);
           continue;
-        }
-        // For photos in the cloud, also save a small preview copy. The preview
-        // is what the Social Media tab sends to the AI (fast + cheap); the
-        // original full-size photo is what you download to post.
-        let hasPreview = false;
-        if (isCloud && file.type?.startsWith("image/")) {
-          const preview = await makeImagePreview(file);
-          if (preview) hasPreview = await saveDocumentPreview(docId, preview);
         }
         newDocs.push({
           id: docId,
@@ -6570,8 +6578,8 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
           size: file.size,
           addedAt: new Date().toISOString(),
           cloud: !!isCloud,
-          category: category || "docs",
-          hasPreview,
+          // If targetSection specified, use it; otherwise auto by MIME
+          section: targetSection || autoSection(file.type),
         });
       } catch (e) {
         setError(`Failed to upload "${file.name}": ${e.message}`);
@@ -6581,12 +6589,13 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
     if (newDocs.length > 0) {
       onUpdate({ ...txn, documents: [...docs, ...newDocs] });
     }
-    setUploading("");
+    setUploading(false);
+    setUploadTargetSection(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const removeDoc = async (doc) => {
     if (!confirm(`Remove "${doc.name}"? This deletes the file — it can't be undone.`)) return;
-    // Use doc.cloud if present, else fall back to current cloud mode (legacy local docs need local cleanup)
     const docWasCloud = doc.cloud === true || (doc.cloud === undefined && isCloud);
     await removeDocumentBlob(doc.id, docWasCloud);
     onUpdate({ ...txn, documents: docs.filter(d => d.id !== doc.id) });
@@ -6598,24 +6607,41 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
     onUpdate({ ...txn, documents: docs.map(d => d.id === doc.id ? { ...d, name: newName } : d) });
   };
 
-  const moveDoc = (doc, category) => {
-    onUpdate({ ...txn, documents: docs.map(d => d.id === doc.id ? { ...d, category } : d) });
+  // Change which section a file lives in. Clears isCover if moving out of Photos.
+  const changeSection = (docId, newSection) => {
+    onUpdate({
+      ...txn,
+      documents: docs.map(d =>
+        d.id === docId
+          ? { ...d, section: newSection, isCover: newSection === "photo" ? d.isCover : false }
+          : d
+      ),
+    });
   };
 
-  // Move a photo to the front of the list (first photo = cover photo)
-  const makeCover = (doc) => {
-    const others = docs.filter(d => d.id !== doc.id);
-    onUpdate({ ...txn, documents: [{ ...doc }, ...others] });
+  // Set a single photo as the cover (clears cover flag on others)
+  const setCover = (docId) => {
+    onUpdate({
+      ...txn,
+      documents: docs.map(d => ({ ...d, isCover: d.id === docId })),
+    });
   };
 
-  // Wrappers for open/download that pass each doc's cloud flag
   const openDoc = (doc) => openDocument(doc, doc.cloud === true || (doc.cloud === undefined && isCloud));
   const downloadDoc = (doc) => downloadDocument(doc, doc.cloud === true || (doc.cloud === undefined && isCloud));
 
-  const docRow = (doc) => (
-    <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8, flexWrap: "wrap" }}>
+  // Trigger the hidden file input for a specific target section
+  const openUploadForSection = (section) => {
+    setUploadTargetSection(section);
+    // Needs a tick so state updates before click dispatches
+    setTimeout(() => fileInputRef.current?.click(), 0);
+  };
+
+  // Shared file-row renderer (used in NWMLS and Documents sections)
+  const renderFileRow = (doc) => (
+    <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
       <div style={{ fontSize: 20 }}>{documentIcon(doc.type, doc.name)}</div>
-      <div style={{ flex: 1, minWidth: 120 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 500, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.name}</div>
         <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>
           {formatFileSize(doc.size)} · {fmtDate(doc.addedAt?.split("T")[0])}
@@ -6623,12 +6649,14 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
       </div>
       {isListing && (
         <select
-          value={docCategory(doc)}
-          onChange={(e) => moveDoc(doc, e.target.value)}
-          title="Move to another section"
-          style={{ fontSize: 11, padding: "3px 4px", border: "1px solid var(--ink-line)", borderRadius: 6, background: "var(--paper-soft)", color: "var(--ink-soft)" }}
+          value={doc.section}
+          onChange={(e) => changeSection(doc.id, e.target.value)}
+          style={{ fontSize: 11, padding: "3px 6px", border: "1px solid var(--ink-line)", borderRadius: 4, background: "var(--paper)", color: "var(--ink-soft)" }}
+          title="Move to a different section"
         >
-          {DOC_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.short}</option>)}
+          <option value="nwmls">NWMLS Printout</option>
+          <option value="photo">Photos</option>
+          <option value="doc">Documents</option>
         </select>
       )}
       <button onClick={() => openDoc(doc)} style={{ ...styles.btn, ...styles.btnGhost, padding: "4px 10px", fontSize: 11 }} title="Open in new tab">
@@ -6646,70 +6674,67 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
     </div>
   );
 
-  const photoGrid = (photos) => (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8, marginBottom: 12 }}>
-      {photos.map((doc, i) => (
-        <div key={doc.id} style={{ position: "relative", borderRadius: 8, overflow: "hidden", border: "1px solid var(--ink-line)", background: "var(--paper)", aspectRatio: "4 / 3" }}>
-          {thumbs[doc.id] ? (
-            <img src={thumbs[doc.id]} alt={doc.name} onClick={() => openDoc(doc)}
-              style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "pointer", display: "block" }} />
-          ) : (
-            <div onClick={() => openDoc(doc)} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, cursor: "pointer" }}>🖼</div>
-          )}
-          {i === 0 && (
-            <div style={{ position: "absolute", left: 4, top: 4, background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: 10, padding: "2px 6px", borderRadius: 4, letterSpacing: "0.05em" }}>COVER</div>
-          )}
-          <div style={{ position: "absolute", right: 4, top: 4, display: "flex", gap: 4 }}>
-            {i !== 0 && (
-              <button onClick={() => makeCover(doc)} title="Make cover photo"
-                style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, padding: "2px 5px", cursor: "pointer" }}>★</button>
-            )}
-            <button onClick={() => downloadDoc(doc)} title="Download"
-              style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, padding: "2px 5px", cursor: "pointer", display: "flex", alignItems: "center" }}><Download size={11} /></button>
-            <button onClick={() => removeDoc(doc)} title="Remove"
-              style={{ background: "rgba(0,0,0,0.6)", color: "#fff", border: "none", borderRadius: 4, padding: "2px 5px", cursor: "pointer", display: "flex", alignItems: "center" }}><X size={11} /></button>
-          </div>
+  // Photo tile (thumbnail with cover-star + delete overlay)
+  const renderPhotoTile = (doc) => (
+    <div key={doc.id} style={{ position: "relative", width: 110, height: 110, borderRadius: 8, overflow: "hidden", background: "var(--paper)", border: doc.isCover ? "2px solid var(--accent)" : "1px solid var(--ink-line)" }}>
+      <div style={{ position: "absolute", inset: 0 }}>
+        <PhotoThumbnail doc={doc} />
+      </div>
+      {doc.isCover && (
+        <div style={{ position: "absolute", top: 4, left: 4, fontSize: 10, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 4, fontWeight: 600 }}>
+          COVER
         </div>
-      ))}
+      )}
+      <div style={{ position: "absolute", top: 4, right: 4, display: "flex", gap: 2 }}>
+        <button onClick={() => setCover(doc.id)} title={doc.isCover ? "This is the cover" : "Set as cover"}
+          style={{ background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 4, padding: "2px 5px", cursor: "pointer", fontSize: 12 }}>
+          {doc.isCover ? "★" : "☆"}
+        </button>
+        <button onClick={() => removeDoc(doc)} title="Remove"
+          style={{ background: "rgba(255,255,255,0.9)", border: "none", borderRadius: 4, padding: "2px 5px", cursor: "pointer" }}>
+          <X size={10} />
+        </button>
+      </div>
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "3px 6px", background: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 9, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {doc.name}
+      </div>
     </div>
   );
 
-  // Buyer transactions keep the single "Documents" list. Listings get three
-  // sections: NWMLS printout, Photos, Documents.
-  const groups = isListing
-    ? DOC_CATEGORIES
-    : [{ id: "all", label: "Documents", accept: ".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt", empty: "No documents yet. Drag files here or click below to upload." }];
+  // Reusable upload box used by each section
+  const uploadBox = (section, label, accept) => (
+    <button
+      onClick={() => openUploadForSection(section)}
+      disabled={uploading}
+      style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 14px", fontSize: 13, width: "100%", justifyContent: "center", opacity: uploading ? 0.6 : 1 }}
+    >
+      {uploading && uploadTargetSection === section
+        ? <><Loader2 size={13} className="spin" /> Uploading…</>
+        : <><Upload size={13} /> {label}</>}
+    </button>
+  );
 
-  return (
-    <div style={{ marginTop: 28 }}>
-      <div style={styles.formSectionTitle}>
-        <FileText size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> {isListing ? "Listing Files" : "Documents"} {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400, marginLeft: 6 }}>({docs.length})</span>}
-      </div>
+  // Hidden input dynamically restricted by uploadTargetSection
+  const inputAccept = uploadTargetSection === "photo"
+    ? ".png,.jpg,.jpeg,.gif,.webp"
+    : uploadTargetSection === "nwmls"
+      ? ".pdf"
+      : ".pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.xls,.xlsx,.csv,.txt";
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {groups.map(g => (
-          <DocGroup
-            key={g.id}
-            group={g}
-            showHeader={isListing}
-            docs={g.id === "all" ? docs : docs.filter(d => docCategory(d) === g.id)}
-            uploading={uploading === (g.id === "all" ? "docs" : g.id)}
-            anyUploading={!!uploading}
-            onFiles={(files) => handleFiles(files, g.id === "all" ? undefined : g.id)}
-            renderList={(list) => g.id === "photos"
-              ? photoGrid(list)
-              : <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>{list.map(docRow)}</div>}
-          />
-        ))}
-      </div>
+  const hiddenInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      multiple
+      accept={inputAccept}
+      onChange={(e) => handleFiles(e.target.files, uploadTargetSection)}
+      style={{ display: "none" }}
+    />
+  );
 
-      {error && (
-        <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(196, 96, 47, 0.1)", border: "1px solid var(--accent-soft)", borderRadius: 6, color: "var(--accent)", fontSize: 12 }}>
-          {error}
-        </div>
-      )}
-
-      <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-soft)", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+  const footerInfo = (
+    <>
+      <div style={{ marginTop: 10, fontSize: 11, color: "var(--ink-soft)", display: "flex", justifyContent: "space-between" }}>
         <span>Max {formatFileSize(isCloud ? MAX_FILE_SIZE : MAX_LOCAL_FILE_SIZE)} per file</span>
         {!isCloud && (
           <span style={{ fontWeight: 500 }}>
@@ -6719,66 +6744,129 @@ function DocumentsSection({ txn, onUpdate, isCloud }) {
       </div>
       <div style={{ marginTop: 4, fontSize: 11, color: "var(--ink-soft)" }}>
         {isCloud
-          ? (isListing ? "☁ Stored in cloud. The Social Media tab uses this listing's NWMLS printout and photos to write posts." : "☁ Stored in cloud — syncs across all your devices.")
+          ? "☁ Stored in cloud — syncs across all your devices."
           : "📍 Stored on this device only. Sign in for cloud sync."}
       </div>
+    </>
+  );
+
+  // ───── BUYER TRANSACTIONS: single flat Documents list (unchanged behavior)
+  if (!isListing) {
+    return (
+      <div style={{ marginTop: 28 }}>
+        <div style={styles.formSectionTitle}>
+          <FileText size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Documents {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400, marginLeft: 6 }}>({docs.length})</span>}
+        </div>
+        <div
+          style={{ padding: 14, background: "var(--paper-soft)", border: dragActive ? "1px dashed var(--accent)" : "1px solid var(--ink-line)", borderRadius: 12, transition: "border 0.15s" }}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); }}
+        >
+          {docs.length === 0 && !uploading && (
+            <div style={{ textAlign: "center", padding: "16px 0", color: "var(--ink-soft)", fontSize: 13 }}>
+              No documents yet. Drag files here or click below to upload.
+            </div>
+          )}
+          {docs.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+              {docs.map(renderFileRow)}
+            </div>
+          )}
+          {hiddenInput}
+          {uploadBox(null, "Upload files")}
+          {error && (
+            <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(196, 96, 47, 0.1)", border: "1px solid var(--accent-soft)", borderRadius: 6, color: "var(--accent)", fontSize: 12 }}>
+              {error}
+            </div>
+          )}
+          {footerInfo}
+        </div>
+      </div>
+    );
+  }
+
+  // ───── LISTING TRANSACTIONS: three-section Listing Files view
+  const nwmlsDocs = docs.filter(d => d.section === "nwmls");
+  const photoDocs = docs.filter(d => d.section === "photo");
+  const otherDocs = docs.filter(d => d.section === "doc");
+
+  const sectionCard = (title, count, children) => (
+    <div style={{ marginBottom: 14, padding: 12, background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--ink-soft)", fontWeight: 600, marginBottom: 10 }}>
+        {title}{count > 0 && <span style={{ fontWeight: 400, marginLeft: 6 }}>({count})</span>}
+      </div>
+      {children}
     </div>
   );
-}
 
-// One upload box (used for each section: NWMLS printout / Photos / Documents)
-function DocGroup({ group, showHeader, docs, uploading, anyUploading, onFiles, renderList }) {
-  const inputRef = useRef(null);
-  const [dragActive, setDragActive] = useState(false);
   return (
-    <div
-      style={{
-        padding: 14,
-        background: "var(--paper-soft)",
-        border: dragActive ? "1px dashed var(--accent)" : "1px solid var(--ink-line)",
-        borderRadius: 12,
-        transition: "border 0.15s",
-      }}
-      onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
-      onDragLeave={() => setDragActive(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragActive(false);
-        onFiles(e.dataTransfer.files);
-      }}
-    >
-      {showHeader && (
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>
-            {group.icon} {group.label} {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400 }}>({docs.length})</span>}
+    <div style={{ marginTop: 28 }}>
+      <div style={styles.formSectionTitle}>
+        <FileText size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Listing Files {docs.length > 0 && <span style={{ color: "var(--ink-soft)", fontWeight: 400, marginLeft: 6 }}>({docs.length})</span>}
+      </div>
+      <div style={{ padding: 14, background: "var(--paper-soft)", border: "1px solid var(--ink-line)", borderRadius: 12 }}>
+
+        {/* NWMLS Printout */}
+        {sectionCard("NWMLS Listing Printout", nwmlsDocs.length, (
+          <>
+            {nwmlsDocs.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                {nwmlsDocs.map(renderFileRow)}
+              </div>
+            )}
+            {nwmlsDocs.length === 0 && (
+              <div style={{ textAlign: "center", padding: "10px 0", color: "var(--ink-soft)", fontSize: 12, marginBottom: 10 }}>
+                Upload the NWMLS listing printout (PDF)
+              </div>
+            )}
+            {uploadBox("nwmls", "Upload NWMLS printout")}
+          </>
+        ))}
+
+        {/* Photos */}
+        {sectionCard("Photos", photoDocs.length, (
+          <>
+            {photoDocs.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                {photoDocs.map(renderPhotoTile)}
+              </div>
+            )}
+            {photoDocs.length === 0 && (
+              <div style={{ textAlign: "center", padding: "10px 0", color: "var(--ink-soft)", fontSize: 12, marginBottom: 10 }}>
+                No photos yet. Upload listing photos below — tap ★ to set a cover photo.
+              </div>
+            )}
+            {uploadBox("photo", "Upload photos")}
+          </>
+        ))}
+
+        {/* Documents */}
+        {sectionCard("Documents", otherDocs.length, (
+          <>
+            {otherDocs.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                {otherDocs.map(renderFileRow)}
+              </div>
+            )}
+            {otherDocs.length === 0 && (
+              <div style={{ textAlign: "center", padding: "10px 0", color: "var(--ink-soft)", fontSize: 12, marginBottom: 10 }}>
+                Signed contracts, inspection reports, etc.
+              </div>
+            )}
+            {uploadBox("doc", "Upload documents")}
+          </>
+        ))}
+
+        {hiddenInput}
+
+        {error && (
+          <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(196, 96, 47, 0.1)", border: "1px solid var(--accent-soft)", borderRadius: 6, color: "var(--accent)", fontSize: 12 }}>
+            {error}
           </div>
-          <div style={{ fontSize: 11, color: "var(--ink-soft)", textAlign: "right" }}>{group.hint}</div>
-        </div>
-      )}
-
-      {docs.length === 0 && !uploading && (
-        <div style={{ textAlign: "center", padding: "10px 0 14px", color: "var(--ink-soft)", fontSize: 13 }}>
-          {group.empty}
-        </div>
-      )}
-
-      {docs.length > 0 && renderList(docs)}
-
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept={group.accept}
-        onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }}
-        style={{ display: "none" }}
-      />
-      <button
-        onClick={() => inputRef.current?.click()}
-        disabled={anyUploading}
-        style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 14px", fontSize: 13, width: "100%", justifyContent: "center", opacity: anyUploading ? 0.6 : 1 }}
-      >
-        {uploading ? <><Loader2 size={13} className="spin" /> Uploading…</> : <><Upload size={13} /> {group.button || "Upload files"}</>}
-      </button>
+        )}
+        {footerInfo}
+      </div>
     </div>
   );
 }
@@ -8542,400 +8630,215 @@ function socialFileToBase64(file) {
 }
 
 function SocialMediaTab({ transactions = [], isCloud = false }) {
-  const [mode, setMode] = useState("listings"); // "listings" | "random" | "listing"
-  const [postType, setPostType] = useState("surprise");
-  const [notes, setNotes] = useState("");
-  const [file, setFile] = useState(null);
-  const [result, setResult] = useState("");
+  // Chat interface for Jesse's social media posts. Each message is sent to
+  // /api/social-generate with mode="chat" along with the running conversation.
+  // Phase A: text-only generation. Phases B+ will add listing lookup, photos,
+  // image overlays, iteration logic, and photo upload.
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
-  const fileInputRef = useRef(null);
+  const [copiedId, setCopiedId] = useState("");
+  const scrollRef = useRef(null);
 
-  // "My listings" mode
-  const [request, setRequest] = useState("");
-  const [picked, setPicked] = useState([]); // txn ids tapped by the user (optional)
-  const [posts, setPosts] = useState([]);   // [{ title, listingIds, post, photoIds }]
-  const [photoUrls, setPhotoUrls] = useState({}); // docId -> preview/thumbnail url
-
-  // Brand palette (matches the original SocialMediaTab file)
+  // Brand palette
   const C = {
     cream: "#F5F1E8", card: "#FBF9F4", taupe: "#8A7E6B",
     taupeLight: "#D8CFBE", charcoal: "#2E2B26", ink: "#4A453D",
     red: "#C8102E", redDark: "#A00D25", line: "#E4DCCB",
   };
-  const serif = "Cambria, Georgia, 'Times New Roman', serif";
+  const serif = "Cambria, Georgia, \'Times New Roman\', serif";
 
-  // Active listings = listing transactions that aren't pending or closed
+  // Count active listings for the welcome state
   const activeListings = useMemo(
-    () => transactions
-      .filter(t => t.type === "listing" && isActiveStage(t))
-      .sort((a, b) => (a.address || "").localeCompare(b.address || "")),
+    () => (transactions || []).filter(t => t.type === "listing" && isActiveStage(t)),
     [transactions]
   );
-  const txnById = useMemo(() => Object.fromEntries(transactions.map(t => [t.id, t])), [transactions]);
-  const docById = useMemo(() => {
-    const m = {};
-    transactions.forEach(t => (t.documents || []).forEach(d => { m[d.id] = { ...d, txnId: t.id }; }));
-    return m;
-  }, [transactions]);
 
-  const filesFor = (t) => {
-    const docs = t.documents || [];
-    return {
-      nwmls: docs.filter(d => docCategory(d) === "nwmls"),
-      photos: docs.filter(d => docCategory(d) === "photos" && d.type?.startsWith("image/")),
-    };
-  };
+  // Keep view pinned to the latest message
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, loading]);
 
-  async function readJson(res) {
-    const text = await res.text();
-    try { return JSON.parse(text); }
-    catch { throw new Error(res.status === 504 ? "That took too long — try fewer listings at once." : "Server error. Try again in a moment."); }
-  }
+  async function send() {
+    const text = input.trim();
+    if (!text || loading) return;
+    setError("");
+    setInput("");
 
-  async function generateListings() {
-    setError(""); setPosts([]); setLoading(true);
+    const userMsg = { id: newId(), role: "user", content: text, ts: Date.now() };
+    const nextMessages = [...messages, userMsg];
+    setMessages(nextMessages);
+    setLoading(true);
+
     try {
-      if (!isCloud) throw new Error("Sign in (cloud mode) to use your listings — files need to be stored in the cloud.");
-      if (activeListings.length === 0) throw new Error("No active listings in Pipeline yet.");
-      const ask = request.trim() || "Create a social media post for each of my active listings.";
-      const roster = picked.length > 0 ? activeListings.filter(t => picked.includes(t.id)) : activeListings;
-
-      // Get temporary links to each listing's NWMLS printout + photos so the
-      // AI can read them directly from storage.
-      const keys = [];
-      roster.forEach(t => {
-        const { nwmls, photos } = filesFor(t);
-        nwmls.slice(0, 2).forEach(d => keys.push(d.id));
-        photos.slice(0, 15).forEach(d => keys.push(d.hasPreview ? `${d.id}_preview` : d.id));
-      });
-      const urls = await getSignedDocUrls(keys);
-
-      const thumbMap = {};
-      const listings = roster.map(t => {
-        const { nwmls, photos } = filesFor(t);
-        return {
-          id: t.id,
-          address: t.address || "",
-          city: t.city || "",
-          state: t.state || "",
-          zip: t.zip || "",
-          listPrice: t.listPrice || t.price || "",
-          status: t.status || "",
-          includedItems: t.includedItems || "",
-          nwmls: nwmls.slice(0, 2)
-            .filter(d => urls[d.id])
-            .map(d => ({ id: d.id, type: d.type, url: urls[d.id] })),
-          photos: photos.slice(0, 15)
-            .map(d => {
-              const key = d.hasPreview ? `${d.id}_preview` : d.id;
-              if (!urls[key]) return null;
-              thumbMap[d.id] = urls[key];
-              // Originals without a preview are only sent if they're small enough for the AI
-              const tooBig = !d.hasPreview && d.size > 4.5 * 1024 * 1024;
-              return tooBig ? null : { id: d.id, name: d.name, type: d.hasPreview ? "image/jpeg" : d.type, url: urls[key] };
-            })
-            .filter(Boolean),
-        };
-      });
-      setPhotoUrls(thumbMap);
+      // Send listing summary with every message so the backend can look up
+      // listings by address when the user mentions one. Keeps the payload small.
+      const listingContext = activeListings.map(t => ({
+        id: t.id,
+        address: t.address || "",
+        city: t.city || "",
+        state: t.state || "",
+        listPrice: t.listPrice || t.price || "",
+        beds: t.beds, baths: t.baths, sqft: t.sqft,
+        hasNwmls: (t.documents || []).some(d => d.section === "nwmls"),
+        photoCount: (t.documents || []).filter(d => d.section === "photo").length,
+      }));
 
       const res = await fetch("/api/social-generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode: "listings", request: ask, listings, forceAll: picked.length > 0 }),
+        body: JSON.stringify({
+          mode: "chat",
+          messages: nextMessages.map(m => ({ role: m.role, content: m.content })),
+          activeListings: listingContext,
+        }),
       });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(data.error || "Generation failed.");
-      setPosts((data.posts || []).map((p, i) => ({ ...p, key: `${Date.now()}_${i}` })));
-      if (!data.posts || data.posts.length === 0) throw new Error("No posts came back — try rewording your request.");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Generation failed");
+
+      const assistantMsg = {
+        id: newId(),
+        role: "assistant",
+        content: data.post || data.reply || "",
+        ts: Date.now(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
     } catch (e) {
-      setError(e.message);
+      setError(e.message || "Something went wrong");
     } finally {
       setLoading(false);
     }
   }
 
-  async function generate() {
-    if (mode === "listings") return generateListings();
-    setError(""); setCopied(false); setLoading(true);
+  async function copyMessage(msg) {
     try {
-      let body;
-      if (mode === "listing") {
-        if (!file) throw new Error("Upload an MLS listing sheet (PDF) first.");
-        const pdfBase64 = await socialFileToBase64(file);
-        body = { mode: "listing", pdfBase64, notes };
-      } else {
-        body = { mode: "random", postType, notes };
-      }
-      const res = await fetch("/api/social-generate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(data.error || "Generation failed.");
-      setResult(data.post || "");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function copyResult() {
-    try {
-      await navigator.clipboard.writeText(result);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      await navigator.clipboard.writeText(msg.content);
+      setCopiedId(msg.id);
+      setTimeout(() => setCopiedId(""), 1600);
     } catch {
-      setError("Copy failed — select the text and copy manually.");
+      setError("Copy failed \u2014 select the text and copy manually.");
     }
   }
 
-  const togglePick = (id) => setPicked(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
-
-  const QUICK_ASKS = [
-    { label: "One post with all active listings", text: "Create me a social media post with all my active listings" },
-    { label: "A post for each listing", text: "Make a separate post for each of my active listings" },
-    { label: "Price improvement…", text: "Make a price improvement post for the ___ listing. New price: $___" },
-    { label: "Open house…", text: "Make an open house post for the ___ listing — open house this Saturday 12–2" },
-  ];
+  function clearChat() {
+    if (messages.length === 0) return;
+    if (!confirm("Start a new chat? Current conversation will be cleared.")) return;
+    setMessages([]);
+    setError("");
+  }
 
   const s = {
-    wrap: { fontFamily: serif, color: C.charcoal, background: C.cream, padding: "28px", borderRadius: 14, maxWidth: 760, margin: "0 auto" },
-    h1: { fontSize: 26, margin: "0 0 4px", letterSpacing: 0.3 },
-    sub: { color: C.taupe, fontSize: 14, margin: "0 0 22px" },
-    toggleRow: { display: "flex", gap: 8, marginBottom: 22, flexWrap: "wrap" },
-    toggle: (active) => ({
-      flex: 1, minWidth: 140, padding: "12px 14px", borderRadius: 10,
-      border: `1px solid ${active ? C.charcoal : C.line}`,
-      background: active ? C.charcoal : C.card, color: active ? C.cream : C.ink,
-      cursor: "pointer", fontFamily: serif, fontSize: 15,
-    }),
-    card: { background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 20, marginBottom: 18 },
-    label: { display: "block", fontSize: 13, color: C.taupe, marginBottom: 6, letterSpacing: 0.4, textTransform: "uppercase" },
-    select: { width: "100%", padding: "11px 12px", borderRadius: 8, border: `1px solid ${C.line}`, background: "#fff", fontFamily: serif, fontSize: 15, color: C.ink, marginBottom: 16 },
-    textarea: { width: "100%", boxSizing: "border-box", padding: "11px 12px", borderRadius: 8, border: `1px solid ${C.line}`, background: "#fff", fontFamily: serif, fontSize: 15, color: C.ink, resize: "vertical", minHeight: 60 },
-    dropZone: { border: `1.5px dashed ${C.taupeLight}`, borderRadius: 10, padding: "26px 18px", textAlign: "center", background: "#fff", cursor: "pointer", marginBottom: 16, color: C.taupe },
-    genBtn: {
-      width: "100%", padding: "14px", borderRadius: 10, border: "none",
-      background: loading ? C.taupe : C.red, color: "#fff",
-      fontFamily: serif, fontSize: 17, letterSpacing: 0.4,
-      cursor: loading ? "default" : "pointer",
-      boxShadow: loading ? "none" : "0 2px 0 " + C.redDark,
-    },
-    resultCard: { background: "#fff", border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, marginTop: 8 },
-    resultText: { width: "100%", boxSizing: "border-box", minHeight: 200, padding: 14, borderRadius: 8, border: `1px solid ${C.line}`, fontFamily: serif, fontSize: 16, lineHeight: 1.5, color: C.charcoal, resize: "vertical", whiteSpace: "pre-wrap" },
-    actionRow: { display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" },
-    smallBtn: (primary) => ({
-      padding: "10px 16px", borderRadius: 8,
-      border: `1px solid ${primary ? C.charcoal : C.line}`,
-      background: primary ? C.charcoal : C.card,
-      color: primary ? C.cream : C.ink,
-      fontFamily: serif, fontSize: 14, cursor: "pointer",
-    }),
-    chip: { padding: "6px 10px", borderRadius: 999, border: `1px solid ${C.line}`, background: "#fff", color: C.ink, fontFamily: serif, fontSize: 13, cursor: "pointer" },
-    listingRow: (on) => ({
-      display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 8,
-      border: `1px solid ${on ? C.charcoal : C.line}`, background: on ? "#fff" : C.card,
-      cursor: "pointer", textAlign: "left", width: "100%", fontFamily: serif, color: C.charcoal,
-    }),
-    badge: (ok) => ({ fontSize: 11.5, padding: "2px 8px", borderRadius: 999, background: ok ? "#EAF1E4" : "#F6E9E0", color: ok ? "#4F6B3A" : "#9A5A2E", whiteSpace: "nowrap" }),
-    error: { background: "#FBEAEA", border: `1px solid ${C.red}`, color: C.redDark, padding: "10px 14px", borderRadius: 8, fontSize: 14, marginTop: 14 },
-    hint: { color: C.taupe, fontSize: 12.5, marginTop: 4 },
+    wrap: { fontFamily: serif, color: C.charcoal, background: C.cream, padding: "20px", borderRadius: 14, maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", height: "calc(100vh - 160px)", minHeight: 500 },
+    header: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 },
+    title: { fontSize: 22, margin: 0, fontWeight: 500 },
+    newBtn: { padding: "6px 12px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.card, color: C.ink, fontFamily: serif, fontSize: 13, cursor: "pointer" },
+    history: { flex: 1, overflowY: "auto", padding: "8px 4px", display: "flex", flexDirection: "column", gap: 14 },
+    msgRow: (isUser) => ({ display: "flex", justifyContent: isUser ? "flex-end" : "flex-start" }),
+    userBubble: { maxWidth: "80%", padding: "10px 14px", background: C.charcoal, color: C.cream, borderRadius: 14, borderBottomRightRadius: 4, fontSize: 15, lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+    aiBubble: { maxWidth: "88%", padding: "12px 16px", background: C.card, color: C.ink, border: `1px solid ${C.line}`, borderRadius: 14, borderBottomLeftRadius: 4, fontSize: 15, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" },
+    aiActions: { display: "flex", gap: 8, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.line}` },
+    smallBtn: { padding: "4px 10px", border: `1px solid ${C.line}`, background: "#fff", color: C.ink, borderRadius: 4, fontFamily: serif, fontSize: 12, cursor: "pointer" },
+    loadingBubble: { display: "inline-flex", gap: 4, padding: "12px 16px", background: C.card, color: C.taupe, border: `1px solid ${C.line}`, borderRadius: 14, borderBottomLeftRadius: 4, fontSize: 14, fontStyle: "italic" },
+    inputRow: { marginTop: 12, display: "flex", gap: 8, flexShrink: 0 },
+    input: { flex: 1, padding: "12px 14px", border: `1px solid ${C.line}`, borderRadius: 10, background: "#fff", fontFamily: serif, fontSize: 15, color: C.ink, resize: "none", minHeight: 48, maxHeight: 160 },
+    sendBtn: { padding: "0 20px", border: "none", borderRadius: 10, background: C.red, color: "#fff", fontFamily: serif, fontSize: 15, cursor: loading ? "default" : "pointer", opacity: loading ? 0.6 : 1, boxShadow: `0 2px 0 ${C.redDark}` },
+    error: { background: "#FBEAEA", border: `1px solid ${C.red}`, color: C.redDark, padding: "8px 12px", borderRadius: 6, fontSize: 13, marginTop: 8 },
+    welcome: { padding: "32px 20px", textAlign: "center", color: C.taupe, display: "flex", flexDirection: "column", alignItems: "center", gap: 16, justifyContent: "center", height: "100%" },
+    welcomeTitle: { fontSize: 20, color: C.charcoal, margin: 0 },
+    welcomeHint: { fontSize: 14, color: C.taupe, maxWidth: 460, lineHeight: 1.5 },
+    exampleBtn: { padding: "8px 14px", border: `1px solid ${C.line}`, background: C.card, color: C.ink, borderRadius: 20, fontFamily: serif, fontSize: 13, cursor: "pointer", textAlign: "left" },
+    exampleGrid: { display: "flex", flexDirection: "column", gap: 8, maxWidth: 460, width: "100%" },
   };
+
+  const examples = [
+    "Create me a social media post for a general real estate update",
+    "Write a Monday morning motivational post for buyers",
+    "Draft a post about why fall is a great time to list",
+    activeListings.length > 0
+      ? `Create me a social media post for ${activeListings[0].address || "my active listing"}`
+      : "Suggest a post idea for this week",
+  ];
+
+  function pickExample(text) {
+    setInput(text);
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  }
 
   return (
     <div style={s.wrap}>
-      <h1 style={s.h1}>Social Media</h1>
-      <p style={s.sub}>Fresh, on-brand posts for Facebook &amp; Instagram — in seconds.</p>
-
-      <div style={s.toggleRow}>
-        <button style={s.toggle(mode === "listings")} onClick={() => setMode("listings")}>My listings</button>
-        <button style={s.toggle(mode === "random")} onClick={() => setMode("random")}>Random post</button>
-        <button style={s.toggle(mode === "listing")} onClick={() => setMode("listing")}>From MLS sheet</button>
+      <div style={s.header}>
+        <h1 style={s.title}>Social Media</h1>
+        {messages.length > 0 && (
+          <button style={s.newBtn} onClick={clearChat}>+ New chat</button>
+        )}
       </div>
 
-      {mode === "listings" ? (
-        <div style={s.card}>
-          <label style={s.label}>What do you want?</label>
-          <textarea style={{ ...s.textarea, minHeight: 80 }}
-            placeholder={'e.g. "Create me a social media post with all my active listings" or "Make a post for the 23rd and Bond listings"'}
-            value={request} onChange={(e) => setRequest(e.target.value)} />
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, marginBottom: 18 }}>
-            {QUICK_ASKS.map(q => (
-              <button key={q.label} style={s.chip} onClick={() => setRequest(q.text)}>{q.label}</button>
-            ))}
-          </div>
-
-          <label style={s.label}>Your active listings ({activeListings.length})</label>
-          {activeListings.length === 0 ? (
-            <p style={s.hint}>No active listings yet. Add a listing in Pipeline, then upload its NWMLS printout and photos under Listing Files.</p>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {activeListings.map(t => {
-                const { nwmls, photos } = filesFor(t);
-                const on = picked.includes(t.id);
-                return (
-                  <button key={t.id} style={s.listingRow(on)} onClick={() => togglePick(t.id)}>
-                    <span style={{ fontSize: 16, width: 18 }}>{on ? "☑" : "☐"}</span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ display: "block", fontSize: 15, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.address || "(no address)"}</span>
-                      <span style={{ display: "block", fontSize: 12.5, color: C.taupe }}>{[t.city, t.listPrice ? fmtMoney(t.listPrice) : ""].filter(Boolean).join(" · ")}</span>
-                    </span>
-                    <span style={s.badge(nwmls.length > 0)}>{nwmls.length > 0 ? "✓ NWMLS" : "No NWMLS"}</span>
-                    <span style={s.badge(photos.length > 0)}>{photos.length} 📷</span>
-                  </button>
-                );
-              })}
+      <div style={s.history} ref={scrollRef}>
+        {messages.length === 0 ? (
+          <div style={s.welcome}>
+            <h2 style={s.welcomeTitle}>What should we post about?</h2>
+            <p style={s.welcomeHint}>
+              Just tell me what you want \u2014 like you would in a text message.
+              {activeListings.length > 0 && ` I can see your ${activeListings.length} active listing${activeListings.length === 1 ? "" : "s"} and will pull their details when you mention them.`}
+            </p>
+            <div style={s.exampleGrid}>
+              {examples.map((ex, i) => (
+                <button key={i} style={s.exampleBtn} onClick={() => pickExample(ex)}>
+                  {ex}
+                </button>
+              ))}
             </div>
-          )}
-          <p style={s.hint}>
-            {picked.length > 0
-              ? `Using only the ${picked.length} listing${picked.length > 1 ? "s" : ""} you tapped.`
-              : "Tap listings to pick them, or just name them in your request (\"the 23rd and Bond listings\")."}
-            {" "}Missing NWMLS printouts or photos? Open the listing and add them under Listing Files.
-          </p>
-        </div>
-      ) : (
-        <div style={s.card}>
-          {mode === "random" ? (
-            <>
-              <label style={s.label}>Post type</label>
-              <select style={s.select} value={postType} onChange={(e) => setPostType(e.target.value)}>
-                {SOCIAL_POST_TYPES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </>
-          ) : (
-            <>
-              <label style={s.label}>MLS listing sheet (PDF)</label>
-              <div style={s.dropZone} onClick={() => fileInputRef.current?.click()}>
-                {file ? <span style={{ color: C.charcoal }}>📄 {file.name} — tap to change</span> : <span>Tap to upload the listing data sheet (PDF)</span>}
-              </div>
-              <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" style={{ display: "none" }}
-                onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            </>
-          )}
-
-          <label style={s.label}>Extra direction (optional)</label>
-          <textarea style={s.textarea}
-            placeholder={mode === "listing" ? "e.g. emphasize the shop and RV parking; keep it short" : "e.g. tie it to hunting season; keep it upbeat"}
-            value={notes} onChange={(e) => setNotes(e.target.value)} />
-          <p style={s.hint}>Numbers like rates or prices are never invented — the post will use [brackets] for you to fill in unless they're on the sheet.</p>
-        </div>
-      )}
-
-      <button style={s.genBtn} onClick={generate} disabled={loading}>
-        {loading
-          ? (mode === "listings" ? "Reading your listings & writing…" : "Writing your post…")
-          : (mode === "listings" ? "✍️  Create post" : "✍️  Generate post")}
-      </button>
-      {loading && mode === "listings" && <p style={{ ...s.hint, textAlign: "center" }}>This can take 20–60 seconds — it's reading the NWMLS printouts and looking at the photos.</p>}
+          </div>
+        ) : (
+          messages.map(m => (
+            <div key={m.id} style={s.msgRow(m.role === "user")}>
+              {m.role === "user" ? (
+                <div style={s.userBubble}>{m.content}</div>
+              ) : (
+                <div style={s.aiBubble}>
+                  {m.content}
+                  <div style={s.aiActions}>
+                    <button style={s.smallBtn} onClick={() => copyMessage(m)}>
+                      {copiedId === m.id ? "\u2713 Copied" : "Copy post"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+        {loading && (
+          <div style={s.msgRow(false)}>
+            <div style={s.loadingBubble}>Writing\u2026</div>
+          </div>
+        )}
+      </div>
 
       {error && <div style={s.error}>{error}</div>}
 
-      {mode === "listings" && posts.map(p => (
-        <ListingPostCard
-          key={p.key}
-          post={p}
-          s={s}
-          C={C}
-          txnById={txnById}
-          docById={docById}
-          photoUrls={photoUrls}
-          onChange={(text) => setPosts(ps => ps.map(x => x.key === p.key ? { ...x, post: text } : x))}
+      <div style={s.inputRow}>
+        <textarea
+          style={s.input}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={activeListings.length > 0
+            ? "e.g. \"create a just-listed post for 1745 23rd\" or \"write a market update\"\u2026"
+            : "e.g. \"write a market update post\"\u2026"}
+          rows={1}
         />
-      ))}
-      {mode === "listings" && posts.length > 0 && (
-        <div style={{ textAlign: "center", marginTop: 14 }}>
-          <button style={s.smallBtn(false)} onClick={generate} disabled={loading}>↻ Regenerate</button>
-        </div>
-      )}
-
-      {mode !== "listings" && result && (
-        <div style={s.resultCard}>
-          <label style={s.label}>Your post — edit freely</label>
-          <textarea style={s.resultText} value={result} onChange={(e) => setResult(e.target.value)} />
-          <div style={s.actionRow}>
-            <button style={s.smallBtn(true)} onClick={copyResult}>{copied ? "✓ Copied!" : "Copy post"}</button>
-            <button style={s.smallBtn(false)} onClick={generate} disabled={loading}>↻ Regenerate</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// One generated post: editable text, copy button, and the photos picked for it
-function ListingPostCard({ post, s, C, txnById, docById, photoUrls, onChange }) {
-  const [copied, setCopied] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const photos = (post.photoIds || []).map(id => docById[id]).filter(Boolean);
-  const addresses = (post.listingIds || []).map(id => txnById[id]?.address).filter(Boolean);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(post.post || "");
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      alert("Copy failed — select the text and copy manually.");
-    }
-  }
-
-  async function downloadPhotos() {
-    setDownloading(true);
-    try {
-      for (let i = 0; i < photos.length; i++) {
-        const d = photos[i];
-        const ext = (d.name.match(/\.[a-z0-9]+$/i) || [".jpg"])[0];
-        const base = (txnById[d.txnId]?.address || "photo").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
-        const url = await getDownloadUrl(d.id, `${String(i + 1).padStart(2, "0")}-${base}${ext}`);
-        if (!url) continue;
-        const a = document.createElement("a");
-        a.href = url;
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        await new Promise(r => setTimeout(r, 400)); // let the browser start each download
-      }
-    } finally {
-      setDownloading(false);
-    }
-  }
-
-  return (
-    <div style={{ ...s.resultCard, marginTop: 16 }}>
-      <label style={s.label}>{post.title || "Your post"}</label>
-      {addresses.length > 0 && <p style={{ ...s.hint, marginTop: -2, marginBottom: 10 }}>📍 {addresses.join(" · ")}</p>}
-      <textarea style={s.resultText} value={post.post || ""} onChange={(e) => onChange(e.target.value)} />
-
-      {photos.length > 0 && (
-        <>
-          <label style={{ ...s.label, marginTop: 14 }}>Suggested photos, in posting order ({photos.length})</label>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", gap: 6 }}>
-            {photos.map((d, i) => (
-              <div key={d.id} style={{ position: "relative", aspectRatio: "4 / 3", borderRadius: 6, overflow: "hidden", border: `1px solid ${C.line}`, background: C.card }}>
-                {photoUrls[d.id]
-                  ? <img src={photoUrls[d.id]} alt={d.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-                  : <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>🖼</div>}
-                <span style={{ position: "absolute", left: 4, top: 4, background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: 11, padding: "1px 6px", borderRadius: 4 }}>{i + 1}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      <div style={s.actionRow}>
-        <button style={s.smallBtn(true)} onClick={copy}>{copied ? "✓ Copied!" : "Copy post"}</button>
-        {photos.length > 0 && (
-          <button style={s.smallBtn(false)} onClick={downloadPhotos} disabled={downloading}>
-            {downloading ? "Downloading…" : `⬇ Download ${photos.length} photo${photos.length > 1 ? "s" : ""}`}
-          </button>
-        )}
+        <button style={s.sendBtn} onClick={send} disabled={loading || !input.trim()}>
+          {loading ? "\u2026" : "Send"}
+        </button>
       </div>
     </div>
   );

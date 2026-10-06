@@ -331,11 +331,60 @@ async function fetchNwmlsAttachments(mentionedListings) {
   return results;
 }
 
+// Phase C: Fetch signed URLs for photos of mentioned listings. Cover photo
+// first, then the rest in saved order. Capped to avoid token explosion.
+const PHOTOS_PER_LISTING = 6;
+async function fetchPhotoAttachments(mentionedListings) {
+  if (!mentionedListings || mentionedListings.length === 0) return [];
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  if (!serviceRoleKey || !supabaseUrl) return [];
+
+  const txnIds = mentionedListings.map(l => l.id);
+  const ownerIds = await getOwnerIdByTxn(serviceRoleKey, supabaseUrl, txnIds);
+
+  const results = [];
+  for (const l of mentionedListings) {
+    const ownerId = ownerIds[l.id];
+    if (!ownerId) continue;
+    const photoIds = Array.isArray(l.photoDocIds) ? l.photoDocIds.slice() : [];
+    if (photoIds.length === 0) continue;
+    // Cover photo first if we have one
+    let ordered = photoIds;
+    if (l.coverPhotoId && photoIds.includes(l.coverPhotoId)) {
+      ordered = [l.coverPhotoId, ...photoIds.filter(id => id !== l.coverPhotoId)];
+    }
+    ordered = ordered.slice(0, PHOTOS_PER_LISTING);
+    for (const photoId of ordered) {
+      const url = await signedUrl(serviceRoleKey, supabaseUrl, `${ownerId}/${photoId}`);
+      if (url) {
+        results.push({
+          listingId: l.id,
+          address: l.address,
+          url,
+          isCover: photoId === l.coverPhotoId,
+        });
+      }
+    }
+  }
+  return results;
+}
+
 async function doChat({ messages, activeListings }) {
+  // Build a rich listing summary — include ALL the fields Pipeline knows about
+  // so Claude has them even when the NWMLS printout isn't attached.
   const listingLines = (activeListings && activeListings.length > 0)
-    ? activeListings.map((l, i) =>
-        `${i + 1}. ${l.address || "(no address)"}${l.city ? `, ${l.city}` : ""}${l.listPrice ? ` ($${Number(l.listPrice).toLocaleString()})` : ""}`
-      ).join("\n")
+    ? activeListings.map((l, i) => {
+        const parts = [`${i + 1}. ${l.address || "(no address)"}`];
+        if (l.city || l.state) parts.push([l.city, l.state].filter(Boolean).join(", "));
+        if (l.listPrice) parts.push(`Price: $${Number(l.listPrice).toLocaleString()}`);
+        if (l.beds) parts.push(`${l.beds} beds`);
+        if (l.baths) parts.push(`${l.baths} baths`);
+        if (l.sqft) parts.push(`${Number(l.sqft).toLocaleString()} sqft`);
+        parts.push(`NWMLS printout: ${l.hasNwmls ? "yes" : "no"}`);
+        parts.push(`Photos: ${l.photoCount || 0}`);
+        return parts.join(" | ");
+      }).join("\n")
     : "(none in the app yet)";
 
   // Keep the system prompt SHORT and purely directive.
@@ -367,34 +416,44 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     content: m.content,
   }));
 
-  // Phase B: Find listings mentioned in the latest user message and attach
-  // their NWMLS printout PDFs so Claude has the real details to work with.
+  // Phase B+C: Find listings mentioned in the latest user message and attach
+  // their NWMLS printout PDFs AND photos so Claude has the real details and
+  // visual context to work with.
   const lastUserMsg = [...trimmed].reverse().find(m => m.role === "user");
   const lastText = lastUserMsg?.content || "";
   const mentioned = findMentionedListings(lastText, activeListings);
-  const attachments = await fetchNwmlsAttachments(mentioned);
+  const nwmlsAtt = await fetchNwmlsAttachments(mentioned);
+  const photoAtt = await fetchPhotoAttachments(mentioned);
 
-  // If we have NWMLS attachments, convert the LAST user message into a
-  // multimodal message with the PDF(s) attached. The rest of the history
-  // stays as plain text (previous turns' context carries forward through
-  // Claude's own responses).
-  if (attachments.length > 0 && trimmed.length > 0) {
+  // If we have attachments, convert the LAST user message into a multimodal
+  // message with the PDFs and photos attached.
+  if ((nwmlsAtt.length > 0 || photoAtt.length > 0) && trimmed.length > 0) {
     const lastIdx = trimmed.length - 1;
     const lastMsg = trimmed[lastIdx];
     if (lastMsg.role === "user" && typeof lastMsg.content === "string") {
-      const noteLines = attachments.map(a =>
-        `Attached: NWMLS printout for ${a.address}.`
-      ).join("\n");
-      trimmed[lastIdx] = {
-        role: "user",
-        content: [
-          { type: "text", text: `${lastMsg.content}\n\n${noteLines}\n(Pull real details — price, beds/baths, sqft, lot, features, listing remarks — from the attached printout(s). Do not invent anything.)` },
-          ...attachments.map(a => ({
-            type: "document",
-            source: { type: "url", url: a.url },
-          })),
-        ],
-      };
+      const noteLines = [];
+      if (nwmlsAtt.length > 0) {
+        nwmlsAtt.forEach(a => noteLines.push(`Attached: NWMLS printout for ${a.address}.`));
+      }
+      if (photoAtt.length > 0) {
+        noteLines.push(`Attached: ${photoAtt.length} photo${photoAtt.length === 1 ? "" : "s"} from the listing${photoAtt.length === 1 ? "" : "s"} (cover photo first).`);
+      }
+
+      const content = [
+        {
+          type: "text",
+          text: `${lastMsg.content}\n\n${noteLines.join("\n")}\n(Pull real details from the attached NWMLS printout(s). The photos are for your visual reference — mention things you can actually see in them. Do not invent anything.)`,
+        },
+      ];
+      // Attach PDFs first
+      for (const a of nwmlsAtt) {
+        content.push({ type: "document", source: { type: "url", url: a.url } });
+      }
+      // Then photos
+      for (const p of photoAtt) {
+        content.push({ type: "image", source: { type: "url", url: p.url } });
+      }
+      trimmed[lastIdx] = { role: "user", content };
     }
   }
 
@@ -420,7 +479,15 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     };
   }
 
-  return { reply: cleaned, post: cleaned };
+  // Phase C: Return the photos we attached so the frontend can display them
+  // as thumbnails with download links. Strip internal fields.
+  const photosForFrontend = photoAtt.map(p => ({
+    url: p.url,
+    address: p.address,
+    isCover: p.isCover,
+  }));
+
+  return { reply: cleaned, post: cleaned, photos: photosForFrontend };
 }
 
 // ───── Main handler ────────────────────────────────────────────────────

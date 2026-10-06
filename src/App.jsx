@@ -8685,6 +8685,9 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         beds: t.beds, baths: t.baths, sqft: t.sqft,
         hasNwmls: (t.documents || []).some(d => d.section === "nwmls"),
         photoCount: (t.documents || []).filter(d => d.section === "photo").length,
+        // Phase B: send NWMLS printout doc IDs so backend can fetch the PDF
+        // when Jesse mentions this listing
+        nwmlsDocIds: (t.documents || []).filter(d => d.section === "nwmls").map(d => d.id),
       }));
 
       const res = await fetch("/api/social-generate", {

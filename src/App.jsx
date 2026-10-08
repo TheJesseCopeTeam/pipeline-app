@@ -8629,6 +8629,145 @@ function socialFileToBase64(file) {
   });
 }
 
+// Phase D: Renders a branded version of a listing photo using HTML Canvas.
+// Backend sends overlay instructions (template, label, subtitle, source URL);
+// this component downloads the photo, draws the overlay with proper fonts,
+// and provides a Download button. All rendering happens in the user's
+// browser so fonts always work.
+function BrandedOverlayGraphic({ overlay }) {
+  const canvasRef = useRef(null);
+  const [dataUrl, setDataUrl] = useState("");
+  const [rendering, setRendering] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!overlay || !overlay.sourceUrl) return;
+    let cancelled = false;
+
+    const render = async () => {
+      setRendering(true);
+      setError("");
+      try {
+        // Load the source photo into an Image
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => reject(new Error("Could not load photo"));
+          img.src = overlay.sourceUrl;
+        });
+        if (cancelled) return;
+
+        const canvas = canvasRef.current || document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+
+        const imgW = canvas.width;
+        const imgH = canvas.height;
+        const topStripH = Math.round(imgH * 0.13);
+        const bottomStripH = Math.round(imgH * 0.09);
+        const padding = Math.round(imgW * 0.025);
+
+        // Top red banner
+        ctx.fillStyle = "rgba(200, 16, 46, 0.95)";
+        ctx.fillRect(0, 0, imgW, topStripH);
+
+        // Label text
+        const subtitle = overlay.subtitle || "";
+        const hasSub = !!subtitle;
+        const labelSize = Math.round(topStripH * (hasSub ? 0.46 : 0.52));
+        const subSize = Math.round(topStripH * 0.24);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = `900 ${labelSize}px 'Helvetica Neue', Arial, sans-serif`;
+        const labelY = hasSub ? topStripH * 0.4 : topStripH * 0.5;
+        ctx.fillText(overlay.label || "", imgW / 2, labelY);
+
+        if (hasSub) {
+          ctx.font = `700 ${subSize}px 'Helvetica Neue', Arial, sans-serif`;
+          ctx.fillText(subtitle, imgW / 2, topStripH * 0.78);
+        }
+
+        // Bottom dark bar
+        ctx.fillStyle = "rgba(46, 43, 38, 0.92)";
+        ctx.fillRect(0, imgH - bottomStripH, imgW, bottomStripH);
+
+        // RE/MAX left side
+        const brandSize = Math.round(bottomStripH * 0.42);
+        const subBrandSize = Math.round(brandSize * 0.65);
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.font = `900 ${brandSize}px 'Helvetica Neue', Arial, sans-serif`;
+        ctx.fillText("RE/MAX", padding, imgH - bottomStripH * 0.5);
+        const remaxWidth = ctx.measureText("RE/MAX").width;
+        ctx.font = `500 ${subBrandSize}px 'Helvetica Neue', Arial, sans-serif`;
+        ctx.fillText(" PREMIER GROUP", padding + remaxWidth, imgH - bottomStripH * 0.5);
+
+        // Team + phone right side
+        const contactSize = Math.round(bottomStripH * 0.3);
+        ctx.textAlign = "right";
+        ctx.font = `600 ${contactSize}px 'Helvetica Neue', Arial, sans-serif`;
+        ctx.fillText("THE JESSE COPE TEAM", imgW - padding, imgH - bottomStripH * 0.65);
+        ctx.font = `400 ${Math.round(contactSize * 0.9)}px 'Helvetica Neue', Arial, sans-serif`;
+        ctx.fillText("360-431-5915", imgW - padding, imgH - bottomStripH * 0.3);
+
+        const out = canvas.toDataURL("image/jpeg", 0.9);
+        if (!cancelled) {
+          setDataUrl(out);
+          setRendering(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e.message || "Rendering failed");
+          setRendering(false);
+        }
+      }
+    };
+
+    render();
+    return () => { cancelled = true; };
+  }, [overlay]);
+
+  if (!overlay) return null;
+
+  const C = {
+    red: "#C8102E", redDark: "#A00D25", line: "#E4DCCB", taupe: "#8A7E6B",
+  };
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+      <div style={{ fontSize: 11, color: C.red, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+        ✨ Branded graphic
+      </div>
+      {rendering && (
+        <div style={{ padding: 20, color: C.taupe, fontStyle: "italic", textAlign: "center", border: `1px dashed ${C.line}`, borderRadius: 8 }}>
+          Rendering branded graphic…
+        </div>
+      )}
+      {error && (
+        <div style={{ padding: 10, color: C.redDark, fontSize: 12 }}>
+          Couldn't render graphic: {error}
+        </div>
+      )}
+      {dataUrl && (
+        <div style={{ display: "inline-block", borderRadius: 8, overflow: "hidden", border: `2px solid ${C.red}`, maxWidth: 360 }}>
+          <img src={dataUrl} alt="Branded listing graphic" style={{ width: "100%", height: "auto", display: "block" }} />
+          <a href={dataUrl} download={`${(overlay.template || "branded").toLowerCase()}.jpg`}
+             style={{ display: "block", padding: "8px 10px", background: C.red, color: "#fff", fontSize: 12, textAlign: "center", textDecoration: "none", fontWeight: 600 }}>
+            Download graphic
+          </a>
+        </div>
+      )}
+      <canvas ref={canvasRef} style={{ display: "none" }} />
+    </div>
+  );
+}
+
 function SocialMediaTab({ transactions = [], isCloud = false }) {
   // Chat interface for Jesse's social media posts. Each message is sent to
   // /api/social-generate with mode="chat" along with the running conversation.
@@ -8734,8 +8873,9 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         content: data.post || data.reply || "",
         // Phase C: photos the backend returned for this response (signed URLs)
         photos: Array.isArray(data.photos) ? data.photos : [],
-        // Phase D1: branded images (RE/MAX JUST LISTED overlay, etc.)
-        brandedPhotos: Array.isArray(data.brandedPhotos) ? data.brandedPhotos : [],
+        // Phase D (updated): backend sends overlay INSTRUCTIONS; frontend
+        // renders the branded graphic on an HTML Canvas using browser fonts.
+        overlay: data.overlay || null,
         ts: Date.now(),
       };
       setMessages(prev => [...prev, assistantMsg]);
@@ -8839,24 +8979,7 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
               ) : (
                 <div style={s.aiBubble}>
                   {m.content}
-                  {Array.isArray(m.brandedPhotos) && m.brandedPhotos.length > 0 && (
-                    <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
-                      <div style={{ fontSize: 11, color: C.red, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
-                        \u2728 Branded graphic{m.brandedPhotos.length > 1 ? "s" : ""}
-                      </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                        {m.brandedPhotos.map((p, i) => (
-                          <div key={i} style={{ position: "relative", width: 180, borderRadius: 8, overflow: "hidden", border: `2px solid ${C.red}` }}>
-                            <img src={p.url} alt="branded graphic" style={{ width: "100%", height: "auto", display: "block" }} />
-                            <a href={p.url} download={`${(p.template || "branded").toLowerCase()}-${i + 1}.jpg`}
-                               style={{ display: "block", padding: "6px 8px", background: C.red, color: "#fff", fontSize: 11, textAlign: "center", textDecoration: "none", fontWeight: 600 }}>
-                              Download graphic
-                            </a>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {m.overlay && <BrandedOverlayGraphic overlay={m.overlay} />}
                   {Array.isArray(m.photos) && m.photos.length > 0 && (
                     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
                       <div style={{ fontSize: 11, color: C.taupe, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em" }}>

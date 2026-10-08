@@ -12,10 +12,9 @@
 //   VITE_SUPABASE_URL (or SUPABASE_URL)
 //   SUPABASE_SERVICE_ROLE_KEY
 
-// Phase D1: sharp for image compositing (overlays, branding).
-// Vercel includes sharp automatically in serverless functions, but it also
-// needs to be in package.json dependencies.
-import sharp from "sharp";
+// Note: image overlay composition moved to the frontend (HTML Canvas) because
+// Vercel's serverless Node runtime has no fonts installed. The backend only
+// decides WHAT overlay to apply; the browser renders it with real fonts.
 
 const MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
@@ -45,57 +44,6 @@ function templateLabel(template) {
   return labels[template] || template.replace(/_/g, " ");
 }
 
-// Build the SVG overlay for a given template. Dimensions scaled from image.
-function buildOverlaySvg(template, args, imgW, imgH) {
-  const topStripH = Math.round(imgH * 0.13);
-  const bottomStripH = Math.round(imgH * 0.09);
-  const topFontSize = Math.round(topStripH * 0.52);
-  const subFontSize = Math.round(topStripH * 0.26);
-  const brandFontSize = Math.round(bottomStripH * 0.38);
-  const contactFontSize = Math.round(bottomStripH * 0.28);
-  const padding = Math.round(imgW * 0.025);
-
-  const label = templateLabel(template);
-  const subtitle = args.subtitle || "";
-  const hasSubtitle = !!subtitle;
-
-  // Position label — centered vertically if no subtitle, slightly up if there is one
-  const labelY = hasSubtitle ? topStripH * 0.55 : topStripH * 0.68;
-  const subtitleY = topStripH * 0.88;
-
-  // Font strategy: Vercel's serverless Node runtime doesn't bundle Arial, so
-  // we use the generic "sans-serif" family which librsvg (sharp's SVG
-  // renderer) maps to whatever system font IS available (typically DejaVu
-  // Sans on Linux). This renders real text instead of placeholder boxes.
-  const FONT = "sans-serif";
-
-  return `<svg width="${imgW}" height="${imgH}" xmlns="http://www.w3.org/2000/svg">
-    <!-- Top red banner -->
-    <rect x="0" y="0" width="${imgW}" height="${topStripH}" fill="${BRAND.red}" fill-opacity="0.95"/>
-    <text x="${imgW / 2}" y="${labelY}" text-anchor="middle"
-          font-family="${FONT}" font-weight="bold"
-          font-size="${topFontSize}" fill="${BRAND.white}" letter-spacing="4">${label}</text>
-    ${hasSubtitle ? `<text x="${imgW / 2}" y="${subtitleY}" text-anchor="middle"
-          font-family="${FONT}" font-weight="bold"
-          font-size="${subFontSize}" fill="${BRAND.white}" letter-spacing="2">${subtitle}</text>` : ""}
-
-    <!-- Bottom brand bar -->
-    <rect x="0" y="${imgH - bottomStripH}" width="${imgW}" height="${bottomStripH}" fill="${BRAND.charcoal}" fill-opacity="0.92"/>
-    <text x="${padding}" y="${imgH - bottomStripH * 0.42}"
-          font-family="${FONT}" font-weight="bold"
-          font-size="${brandFontSize}" fill="${BRAND.white}" letter-spacing="1">RE/MAX</text>
-    <text x="${padding + brandFontSize * 2.6}" y="${imgH - bottomStripH * 0.42}"
-          font-family="${FONT}" font-weight="normal"
-          font-size="${brandFontSize * 0.75}" fill="${BRAND.white}">PREMIER GROUP</text>
-    <text x="${imgW - padding}" y="${imgH - bottomStripH * 0.6}" text-anchor="end"
-          font-family="${FONT}" font-weight="bold"
-          font-size="${contactFontSize}" fill="${BRAND.white}">THE JESSE COPE TEAM</text>
-    <text x="${imgW - padding}" y="${imgH - bottomStripH * 0.22}" text-anchor="end"
-          font-family="${FONT}" font-weight="normal"
-          font-size="${contactFontSize * 0.9}" fill="${BRAND.white}">360-431-5915</text>
-  </svg>`;
-}
-
 // Try to pull a price out of the user's text (e.g. "$450,000", "$450k", "450000")
 function extractPrice(text) {
   if (!text) return null;
@@ -121,31 +69,6 @@ function extractDateTime(text) {
   }
   if (dayMatch) return dayMatch[0].toUpperCase();
   return null;
-}
-
-// Download an image from URL and composite the overlay on top. Returns a
-// base64 data URL that can be passed straight to the frontend.
-async function composeBrandedImage(imageUrl, template, args = {}) {
-  try {
-    const res = await fetch(imageUrl);
-    if (!res.ok) throw new Error(`Fetch ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    const img = sharp(buf).rotate(); // Honor EXIF orientation
-    const meta = await img.metadata();
-    const imgW = meta.width || 1920;
-    const imgH = meta.height || 1080;
-
-    const svg = buildOverlaySvg(template, args, imgW, imgH);
-    const composited = await img
-      .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
-      .jpeg({ quality: 88 })
-      .toBuffer();
-
-    return `data:image/jpeg;base64,${composited.toString("base64")}`;
-  } catch (e) {
-    console.error("composeBrandedImage failed:", e.message);
-    return null;
-  }
 }
 
 // Detect which overlay template (if any) the user is asking for.
@@ -653,29 +576,22 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     isCover: p.isCover,
   }));
 
-  // Phase D1+D2: Detect overlay template from message and compose branded
-  // graphic. Templates include JUST LISTED, PRICE DROP, OPEN HOUSE, COMING
-  // SOON, PENDING, SOLD, etc.
-  const brandedPhotos = [];
+  // Phase D1+D2: Detect overlay template from message and attach rendering
+  // instructions. The frontend composes the branded image using HTML Canvas
+  // (which has fonts available, unlike Vercel's serverless runtime).
+  let overlay = null;
   const firstMentioned = mentioned[0] || null;
   const overlayInfo = detectOverlayTemplate(lastText, firstMentioned);
   if (overlayInfo && photoAtt.length > 0) {
-    // Use the cover photo (first one) of the first mentioned listing
     const coverPhoto = photoAtt.find(p => p.isCover) || photoAtt[0];
     if (coverPhoto) {
-      const brandedDataUrl = await composeBrandedImage(
-        coverPhoto.url,
-        overlayInfo.template,
-        overlayInfo.args
-      );
-      if (brandedDataUrl) {
-        brandedPhotos.push({
-          url: brandedDataUrl,
-          address: coverPhoto.address,
-          template: overlayInfo.template,
-          branded: true,
-        });
-      }
+      overlay = {
+        sourceUrl: coverPhoto.url,
+        address: coverPhoto.address,
+        template: overlayInfo.template,
+        label: templateLabel(overlayInfo.template),
+        subtitle: overlayInfo.args.subtitle || "",
+      };
     }
   }
 
@@ -683,7 +599,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     reply: cleaned,
     post: cleaned,
     photos: photosForFrontend,
-    brandedPhotos,
+    overlay, // Frontend will render the branded image via Canvas
   };
 }
 

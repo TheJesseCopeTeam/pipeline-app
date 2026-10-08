@@ -63,29 +63,35 @@ function buildOverlaySvg(template, args, imgW, imgH) {
   const labelY = hasSubtitle ? topStripH * 0.55 : topStripH * 0.68;
   const subtitleY = topStripH * 0.88;
 
+  // Font strategy: Vercel's serverless Node runtime doesn't bundle Arial, so
+  // we use the generic "sans-serif" family which librsvg (sharp's SVG
+  // renderer) maps to whatever system font IS available (typically DejaVu
+  // Sans on Linux). This renders real text instead of placeholder boxes.
+  const FONT = "sans-serif";
+
   return `<svg width="${imgW}" height="${imgH}" xmlns="http://www.w3.org/2000/svg">
     <!-- Top red banner -->
     <rect x="0" y="0" width="${imgW}" height="${topStripH}" fill="${BRAND.red}" fill-opacity="0.95"/>
     <text x="${imgW / 2}" y="${labelY}" text-anchor="middle"
-          font-family="Arial Black, Arial, sans-serif" font-weight="900"
+          font-family="${FONT}" font-weight="bold"
           font-size="${topFontSize}" fill="${BRAND.white}" letter-spacing="4">${label}</text>
     ${hasSubtitle ? `<text x="${imgW / 2}" y="${subtitleY}" text-anchor="middle"
-          font-family="Arial, sans-serif" font-weight="600"
+          font-family="${FONT}" font-weight="bold"
           font-size="${subFontSize}" fill="${BRAND.white}" letter-spacing="2">${subtitle}</text>` : ""}
 
     <!-- Bottom brand bar -->
     <rect x="0" y="${imgH - bottomStripH}" width="${imgW}" height="${bottomStripH}" fill="${BRAND.charcoal}" fill-opacity="0.92"/>
     <text x="${padding}" y="${imgH - bottomStripH * 0.42}"
-          font-family="Arial Black, Arial, sans-serif" font-weight="800"
+          font-family="${FONT}" font-weight="bold"
           font-size="${brandFontSize}" fill="${BRAND.white}" letter-spacing="1">RE/MAX</text>
     <text x="${padding + brandFontSize * 2.6}" y="${imgH - bottomStripH * 0.42}"
-          font-family="Arial, sans-serif" font-weight="500"
+          font-family="${FONT}" font-weight="normal"
           font-size="${brandFontSize * 0.75}" fill="${BRAND.white}">PREMIER GROUP</text>
     <text x="${imgW - padding}" y="${imgH - bottomStripH * 0.6}" text-anchor="end"
-          font-family="Arial, sans-serif" font-weight="600"
+          font-family="${FONT}" font-weight="bold"
           font-size="${contactFontSize}" fill="${BRAND.white}">THE JESSE COPE TEAM</text>
     <text x="${imgW - padding}" y="${imgH - bottomStripH * 0.22}" text-anchor="end"
-          font-family="Arial, sans-serif" font-weight="400"
+          font-family="${FONT}" font-weight="normal"
           font-size="${contactFontSize * 0.9}" fill="${BRAND.white}">360-431-5915</text>
   </svg>`;
 }

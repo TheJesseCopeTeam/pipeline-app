@@ -12,8 +12,168 @@
 //   VITE_SUPABASE_URL (or SUPABASE_URL)
 //   SUPABASE_SERVICE_ROLE_KEY
 
+// Phase D1: sharp for image compositing (overlays, branding).
+// Vercel includes sharp automatically in serverless functions, but it also
+// needs to be in package.json dependencies.
+import sharp from "sharp";
+
 const MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+
+// Brand colors for overlays
+const BRAND = {
+  red: "#C8102E",      // RE/MAX red
+  redDark: "#A00D25",
+  charcoal: "#2E2B26",
+  white: "#FFFFFF",
+};
+
+// Template labels (and any optional subtitle info)
+function templateLabel(template) {
+  const labels = {
+    JUST_LISTED: "JUST LISTED",
+    NEW_LISTING: "NEW LISTING",
+    PRICE_DROP: "PRICE DROP",
+    PRICE_IMPROVEMENT: "PRICE IMPROVEMENT",
+    COMING_SOON: "COMING SOON",
+    OPEN_HOUSE: "OPEN HOUSE",
+    PENDING: "PENDING",
+    UNDER_CONTRACT: "UNDER CONTRACT",
+    SOLD: "SOLD",
+    JUST_SOLD: "JUST SOLD",
+  };
+  return labels[template] || template.replace(/_/g, " ");
+}
+
+// Build the SVG overlay for a given template. Dimensions scaled from image.
+function buildOverlaySvg(template, args, imgW, imgH) {
+  const topStripH = Math.round(imgH * 0.13);
+  const bottomStripH = Math.round(imgH * 0.09);
+  const topFontSize = Math.round(topStripH * 0.52);
+  const subFontSize = Math.round(topStripH * 0.26);
+  const brandFontSize = Math.round(bottomStripH * 0.38);
+  const contactFontSize = Math.round(bottomStripH * 0.28);
+  const padding = Math.round(imgW * 0.025);
+
+  const label = templateLabel(template);
+  const subtitle = args.subtitle || "";
+  const hasSubtitle = !!subtitle;
+
+  // Position label — centered vertically if no subtitle, slightly up if there is one
+  const labelY = hasSubtitle ? topStripH * 0.55 : topStripH * 0.68;
+  const subtitleY = topStripH * 0.88;
+
+  return `<svg width="${imgW}" height="${imgH}" xmlns="http://www.w3.org/2000/svg">
+    <!-- Top red banner -->
+    <rect x="0" y="0" width="${imgW}" height="${topStripH}" fill="${BRAND.red}" fill-opacity="0.95"/>
+    <text x="${imgW / 2}" y="${labelY}" text-anchor="middle"
+          font-family="Arial Black, Arial, sans-serif" font-weight="900"
+          font-size="${topFontSize}" fill="${BRAND.white}" letter-spacing="4">${label}</text>
+    ${hasSubtitle ? `<text x="${imgW / 2}" y="${subtitleY}" text-anchor="middle"
+          font-family="Arial, sans-serif" font-weight="600"
+          font-size="${subFontSize}" fill="${BRAND.white}" letter-spacing="2">${subtitle}</text>` : ""}
+
+    <!-- Bottom brand bar -->
+    <rect x="0" y="${imgH - bottomStripH}" width="${imgW}" height="${bottomStripH}" fill="${BRAND.charcoal}" fill-opacity="0.92"/>
+    <text x="${padding}" y="${imgH - bottomStripH * 0.42}"
+          font-family="Arial Black, Arial, sans-serif" font-weight="800"
+          font-size="${brandFontSize}" fill="${BRAND.white}" letter-spacing="1">RE/MAX</text>
+    <text x="${padding + brandFontSize * 2.6}" y="${imgH - bottomStripH * 0.42}"
+          font-family="Arial, sans-serif" font-weight="500"
+          font-size="${brandFontSize * 0.75}" fill="${BRAND.white}">PREMIER GROUP</text>
+    <text x="${imgW - padding}" y="${imgH - bottomStripH * 0.6}" text-anchor="end"
+          font-family="Arial, sans-serif" font-weight="600"
+          font-size="${contactFontSize}" fill="${BRAND.white}">THE JESSE COPE TEAM</text>
+    <text x="${imgW - padding}" y="${imgH - bottomStripH * 0.22}" text-anchor="end"
+          font-family="Arial, sans-serif" font-weight="400"
+          font-size="${contactFontSize * 0.9}" fill="${BRAND.white}">360-431-5915</text>
+  </svg>`;
+}
+
+// Try to pull a price out of the user's text (e.g. "$450,000", "$450k", "450000")
+function extractPrice(text) {
+  if (!text) return null;
+  // $450,000 or $450000 or $450.5k
+  const m1 = text.match(/\$\s?(\d[\d,]*(?:\.\d+)?)\s?[kK]?\b/);
+  if (m1) {
+    const raw = m1[1].replace(/,/g, "");
+    let n = parseFloat(raw);
+    if (m1[0].toLowerCase().includes("k")) n *= 1000;
+    if (n > 0) return `$${Math.round(n).toLocaleString()}`;
+  }
+  return null;
+}
+
+// Try to pull a date/time out of the user's text (e.g. "Saturday 1-3pm")
+function extractDateTime(text) {
+  if (!text) return null;
+  const days = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i;
+  const dayMatch = text.match(days);
+  const timeMatch = text.match(/\b\d{1,2}(:\d{2})?\s?(am|pm)?(\s?[-–]\s?\d{1,2}(:\d{2})?\s?(am|pm)?)?\b/i);
+  if (dayMatch && timeMatch) {
+    return `${dayMatch[0][0].toUpperCase() + dayMatch[0].slice(1).toLowerCase()} ${timeMatch[0].trim()}`.toUpperCase();
+  }
+  if (dayMatch) return dayMatch[0].toUpperCase();
+  return null;
+}
+
+// Download an image from URL and composite the overlay on top. Returns a
+// base64 data URL that can be passed straight to the frontend.
+async function composeBrandedImage(imageUrl, template, args = {}) {
+  try {
+    const res = await fetch(imageUrl);
+    if (!res.ok) throw new Error(`Fetch ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const img = sharp(buf).rotate(); // Honor EXIF orientation
+    const meta = await img.metadata();
+    const imgW = meta.width || 1920;
+    const imgH = meta.height || 1080;
+
+    const svg = buildOverlaySvg(template, args, imgW, imgH);
+    const composited = await img
+      .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+      .jpeg({ quality: 88 })
+      .toBuffer();
+
+    return `data:image/jpeg;base64,${composited.toString("base64")}`;
+  } catch (e) {
+    console.error("composeBrandedImage failed:", e.message);
+    return null;
+  }
+}
+
+// Detect which overlay template (if any) the user is asking for.
+// Returns { template, args } or null if no overlay should be applied.
+function detectOverlayTemplate(text, listing) {
+  const t = (text || "").toLowerCase();
+  const args = {};
+
+  // Order matters: check more specific phrases first
+  if (t.includes("just sold")) return { template: "JUST_SOLD", args };
+  if (t.includes("sold")) return { template: "SOLD", args };
+  if (t.includes("under contract")) return { template: "UNDER_CONTRACT", args };
+  if (t.includes("pending")) return { template: "PENDING", args };
+  if (t.includes("open house")) {
+    const dt = extractDateTime(text);
+    if (dt) args.subtitle = dt;
+    return { template: "OPEN_HOUSE", args };
+  }
+  if (t.includes("coming soon")) return { template: "COMING_SOON", args };
+  if (t.includes("price drop") || t.includes("price reduced") || t.includes("price reduction")) {
+    const p = extractPrice(text) || (listing && listing.listPrice ? `$${Number(listing.listPrice).toLocaleString()}` : null);
+    if (p) args.subtitle = `NOW ${p}`;
+    return { template: "PRICE_DROP", args };
+  }
+  if (t.includes("price improvement")) {
+    const p = extractPrice(text) || (listing && listing.listPrice ? `$${Number(listing.listPrice).toLocaleString()}` : null);
+    if (p) args.subtitle = `NOW ${p}`;
+    return { template: "PRICE_IMPROVEMENT", args };
+  }
+  if (t.includes("new listing")) return { template: "NEW_LISTING", args };
+  if (t.includes("just listed") || t.includes("just-listed")) return { template: "JUST_LISTED", args };
+
+  return null;
+}
 
 // Jesse's post style — applied to all modes.
 const STYLE_GUIDE = `
@@ -480,14 +640,45 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   }
 
   // Phase C: Return the photos we attached so the frontend can display them
-  // as thumbnails with download links. Strip internal fields.
+  // as thumbnails with download links.
   const photosForFrontend = photoAtt.map(p => ({
     url: p.url,
     address: p.address,
     isCover: p.isCover,
   }));
 
-  return { reply: cleaned, post: cleaned, photos: photosForFrontend };
+  // Phase D1+D2: Detect overlay template from message and compose branded
+  // graphic. Templates include JUST LISTED, PRICE DROP, OPEN HOUSE, COMING
+  // SOON, PENDING, SOLD, etc.
+  const brandedPhotos = [];
+  const firstMentioned = mentioned[0] || null;
+  const overlayInfo = detectOverlayTemplate(lastText, firstMentioned);
+  if (overlayInfo && photoAtt.length > 0) {
+    // Use the cover photo (first one) of the first mentioned listing
+    const coverPhoto = photoAtt.find(p => p.isCover) || photoAtt[0];
+    if (coverPhoto) {
+      const brandedDataUrl = await composeBrandedImage(
+        coverPhoto.url,
+        overlayInfo.template,
+        overlayInfo.args
+      );
+      if (brandedDataUrl) {
+        brandedPhotos.push({
+          url: brandedDataUrl,
+          address: coverPhoto.address,
+          template: overlayInfo.template,
+          branded: true,
+        });
+      }
+    }
+  }
+
+  return {
+    reply: cleaned,
+    post: cleaned,
+    photos: photosForFrontend,
+    brandedPhotos,
+  };
 }
 
 // ───── Main handler ────────────────────────────────────────────────────

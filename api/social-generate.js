@@ -88,12 +88,16 @@ function detectOverlayTemplate(text, listing) {
     return { template: "OPEN_HOUSE", args };
   }
   if (t.includes("coming soon")) return { template: "COMING_SOON", args };
-  if (t.includes("price drop") || t.includes("price reduced") || t.includes("price reduction")) {
+  // Price-reduction family: match any of these phrasings, including typos
+  // like "priced reduced" / "priced drop" by matching the word stems.
+  if (/\bpric(e|ed)\s+(drop|reduce|reduced|reduction)/.test(t) ||
+      t.includes("price reduction") || t.includes("price cut") ||
+      t.includes("lower price") || t.includes("new price")) {
     const p = extractPrice(text) || (listing && listing.listPrice ? `$${Number(listing.listPrice).toLocaleString()}` : null);
     if (p) args.subtitle = `NOW ${p}`;
     return { template: "PRICE_DROP", args };
   }
-  if (t.includes("price improvement")) {
+  if (t.includes("price improvement") || t.includes("priced improvement")) {
     const p = extractPrice(text) || (listing && listing.listPrice ? `$${Number(listing.listPrice).toLocaleString()}` : null);
     if (p) args.subtitle = `NOW ${p}`;
     return { template: "PRICE_IMPROVEMENT", args };

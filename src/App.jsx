@@ -8815,6 +8815,7 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState("");
+  const [showOverlayHints, setShowOverlayHints] = useState(false);
   const scrollRef = useRef(null);
 
   // Brand palette
@@ -9030,6 +9031,49 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
       </div>
 
       {error && <div style={s.error}>{error}</div>}
+
+      <div style={{ marginTop: 8, flexShrink: 0 }}>
+        <button
+          onClick={() => setShowOverlayHints(v => !v)}
+          style={{
+            background: "transparent", border: "none", color: C.taupe,
+            fontFamily: serif, fontSize: 12, cursor: "pointer", padding: "4px 0",
+            textDecoration: "underline", textUnderlineOffset: 3,
+          }}>
+          {showOverlayHints ? "Hide" : "Show"} branded graphic trigger words
+        </button>
+        {showOverlayHints && (
+          <div style={{
+            marginTop: 6, padding: "10px 12px",
+            background: C.card, border: `1px solid ${C.line}`, borderRadius: 8,
+            fontSize: 12, color: C.ink, lineHeight: 1.6,
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 6, color: C.charcoal }}>
+              Include any of these phrases in your message to get a matching branded graphic:
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "4px 12px" }}>
+              <div style={{ fontWeight: 600 }}>JUST LISTED:</div>
+              <div>"just listed" / "new listing"</div>
+              <div style={{ fontWeight: 600 }}>PRICE DROP:</div>
+              <div>"price drop" / "price reduced" / "price reduction" / "price cut" / "lower price" / "new price" (add "now $450,000" to show the new price)</div>
+              <div style={{ fontWeight: 600 }}>PRICE IMPROVEMENT:</div>
+              <div>"price improvement"</div>
+              <div style={{ fontWeight: 600 }}>OPEN HOUSE:</div>
+              <div>"open house" (add day/time like "Saturday 1-3pm" to show it)</div>
+              <div style={{ fontWeight: 600 }}>COMING SOON:</div>
+              <div>"coming soon"</div>
+              <div style={{ fontWeight: 600 }}>PENDING:</div>
+              <div>"pending"</div>
+              <div style={{ fontWeight: 600 }}>UNDER CONTRACT:</div>
+              <div>"under contract"</div>
+              <div style={{ fontWeight: 600 }}>SOLD:</div>
+              <div>"sold"</div>
+              <div style={{ fontWeight: 600 }}>JUST SOLD:</div>
+              <div>"just sold"</div>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={s.inputRow}>
         <textarea

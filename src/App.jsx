@@ -8658,6 +8658,10 @@ function BrandedOverlayGraphic({ overlay }) {
         });
         if (cancelled) return;
 
+        // Design matches The Jesse Cope Team's actual branded social posts:
+        // - Small red badge in top-left corner (not full-width banner)
+        // - Thin red accent line below photo
+        // - Navy footer bar with "THE JESSE COPE TEAM • RE/MAX PREMIER GROUP • 360-431-5915"
         const canvas = canvasRef.current || document.createElement("canvas");
         canvas.width = img.naturalWidth;
         canvas.height = img.naturalHeight;
@@ -8666,57 +8670,67 @@ function BrandedOverlayGraphic({ overlay }) {
 
         const imgW = canvas.width;
         const imgH = canvas.height;
-        const topStripH = Math.round(imgH * 0.13);
-        const bottomStripH = Math.round(imgH * 0.09);
-        const padding = Math.round(imgW * 0.025);
 
-        // Top red banner
-        ctx.fillStyle = "rgba(200, 16, 46, 0.95)";
-        ctx.fillRect(0, 0, imgW, topStripH);
+        // ─── BRAND COLORS (from Jesse's actual posts) ───
+        const NAVY = "#1A2C47";
+        const RED = "#C8102E";
+        const WHITE = "#FFFFFF";
 
-        // Label text
+        // ─── TOP-LEFT CORNER BADGE ───
         const subtitle = overlay.subtitle || "";
-        const hasSub = !!subtitle;
-        const labelSize = Math.round(topStripH * (hasSub ? 0.46 : 0.52));
-        const subSize = Math.round(topStripH * 0.24);
+        const label = overlay.label || "";
+        // Measure the label text to size the badge dynamically
+        const badgeFontSize = Math.round(imgH * 0.038);
+        const subFontSize = Math.round(badgeFontSize * 0.75);
+        ctx.font = `900 ${badgeFontSize}px 'Helvetica Neue', Arial, sans-serif`;
+        const labelWidth = ctx.measureText(label).width;
+        let subWidth = 0;
+        if (subtitle) {
+          ctx.font = `700 ${subFontSize}px 'Helvetica Neue', Arial, sans-serif`;
+          subWidth = ctx.measureText(subtitle).width;
+        }
+        const badgePadX = Math.round(badgeFontSize * 0.8);
+        const badgePadY = Math.round(badgeFontSize * 0.45);
+        const badgeW = Math.max(labelWidth, subWidth) + badgePadX * 2;
+        const badgeH = badgeFontSize + (subtitle ? subFontSize + Math.round(badgeFontSize * 0.3) : 0) + badgePadY * 2;
 
-        ctx.fillStyle = "#ffffff";
+        // Red badge rectangle (with slight top-left anchor)
+        ctx.fillStyle = RED;
+        ctx.fillRect(0, 0, badgeW, badgeH);
+
+        // Label text (centered in the badge horizontally)
+        ctx.fillStyle = WHITE;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = `900 ${labelSize}px 'Helvetica Neue', Arial, sans-serif`;
-        const labelY = hasSub ? topStripH * 0.4 : topStripH * 0.5;
-        ctx.fillText(overlay.label || "", imgW / 2, labelY);
+        ctx.font = `900 ${badgeFontSize}px 'Helvetica Neue', Arial, sans-serif`;
+        const labelY = subtitle ? badgePadY + badgeFontSize * 0.55 : badgeH / 2;
+        ctx.fillText(label, badgeW / 2, labelY);
 
-        if (hasSub) {
-          ctx.font = `700 ${subSize}px 'Helvetica Neue', Arial, sans-serif`;
-          ctx.fillText(subtitle, imgW / 2, topStripH * 0.78);
+        if (subtitle) {
+          ctx.font = `700 ${subFontSize}px 'Helvetica Neue', Arial, sans-serif`;
+          ctx.fillText(subtitle, badgeW / 2, labelY + badgeFontSize * 0.7);
         }
 
-        // Bottom dark bar
-        ctx.fillStyle = "rgba(46, 43, 38, 0.92)";
-        ctx.fillRect(0, imgH - bottomStripH, imgW, bottomStripH);
+        // ─── RED ACCENT STRIPE above footer ───
+        const stripeH = Math.max(4, Math.round(imgH * 0.006));
+        const footerH = Math.round(imgH * 0.075);
+        ctx.fillStyle = RED;
+        ctx.fillRect(0, imgH - footerH - stripeH, imgW, stripeH);
 
-        // RE/MAX left side
-        const brandSize = Math.round(bottomStripH * 0.42);
-        const subBrandSize = Math.round(brandSize * 0.65);
-        ctx.fillStyle = "#ffffff";
-        ctx.textAlign = "left";
+        // ─── NAVY FOOTER BAR ───
+        ctx.fillStyle = NAVY;
+        ctx.fillRect(0, imgH - footerH, imgW, footerH);
+
+        // Footer text: THE JESSE COPE TEAM • RE/MAX PREMIER GROUP • 360-431-5915
+        const footerFontSize = Math.round(footerH * 0.33);
+        ctx.fillStyle = WHITE;
+        ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.font = `900 ${brandSize}px 'Helvetica Neue', Arial, sans-serif`;
-        ctx.fillText("RE/MAX", padding, imgH - bottomStripH * 0.5);
-        const remaxWidth = ctx.measureText("RE/MAX").width;
-        ctx.font = `500 ${subBrandSize}px 'Helvetica Neue', Arial, sans-serif`;
-        ctx.fillText(" PREMIER GROUP", padding + remaxWidth, imgH - bottomStripH * 0.5);
+        ctx.font = `700 ${footerFontSize}px 'Helvetica Neue', Arial, sans-serif`;
+        const footerText = "THE JESSE COPE TEAM  •  RE/MAX PREMIER GROUP  •  360-431-5915";
+        ctx.fillText(footerText, imgW / 2, imgH - footerH / 2);
 
-        // Team + phone right side
-        const contactSize = Math.round(bottomStripH * 0.3);
-        ctx.textAlign = "right";
-        ctx.font = `600 ${contactSize}px 'Helvetica Neue', Arial, sans-serif`;
-        ctx.fillText("THE JESSE COPE TEAM", imgW - padding, imgH - bottomStripH * 0.65);
-        ctx.font = `400 ${Math.round(contactSize * 0.9)}px 'Helvetica Neue', Arial, sans-serif`;
-        ctx.fillText("360-431-5915", imgW - padding, imgH - bottomStripH * 0.3);
-
-        const out = canvas.toDataURL("image/jpeg", 0.9);
+        const out = canvas.toDataURL("image/jpeg", 0.92);
         if (!cancelled) {
           setDataUrl(out);
           setRendering(false);

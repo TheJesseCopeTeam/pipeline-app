@@ -9606,6 +9606,34 @@ function BrandedOverlayGraphic({ overlay }) {
   const [styleUsed, setStyleUsed] = useState("");
   // Bumping this triggers a re-render with a new random style selection.
   const [renderNonce, setRenderNonce] = useState(0);
+  // Photo-tour picker: which of overlay.tourPhotos should be included.
+  // Default to the first 4 (cover + 3 others) to keep the initial tour clean.
+  const [tourSelectedUrls, setTourSelectedUrls] = useState(null);
+
+  // When overlay changes, reset the tour selection to the first 4 photos.
+  useEffect(() => {
+    if (overlay && overlay.isTour && Array.isArray(overlay.tourPhotos)) {
+      setTourSelectedUrls(new Set(overlay.tourPhotos.slice(0, 4).map(p => p.url)));
+    } else {
+      setTourSelectedUrls(null);
+    }
+  }, [overlay]);
+
+  function toggleTourPhoto(url) {
+    setTourSelectedUrls(prev => {
+      const next = new Set(prev || []);
+      if (next.has(url)) {
+        // Don't let user drop below 2
+        if (next.size <= 2) return next;
+        next.delete(url);
+      } else {
+        // Cap at 6
+        if (next.size >= 6) return next;
+        next.add(url);
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!overlay || !overlay.sourceUrl) return;
@@ -9639,7 +9667,14 @@ function BrandedOverlayGraphic({ overlay }) {
 
         // ─── PHOTO TOUR PATH (single listing, multiple photos) ───
         if (overlay.isTour && Array.isArray(overlay.tourPhotos) && overlay.tourPhotos.length >= 2) {
-          const imgs = await Promise.all(overlay.tourPhotos.map(p => new Promise((resolve, reject) => {
+          // Use the user-selected order (click order = tour position). Fall
+          // back to the first 4 original photos if selection is empty/stale.
+          const sel = tourSelectedUrls || new Set(overlay.tourPhotos.slice(0, 4).map(p => p.url));
+          const byUrl = new Map(overlay.tourPhotos.map(p => [p.url, p]));
+          let toRender = Array.from(sel).map(url => byUrl.get(url)).filter(Boolean);
+          if (toRender.length < 2) toRender = overlay.tourPhotos.slice(0, Math.min(4, overlay.tourPhotos.length));
+
+          const imgs = await Promise.all(toRender.map(p => new Promise((resolve, reject) => {
             const im = new Image();
             im.crossOrigin = "anonymous";
             im.onload = () => resolve(im);
@@ -9767,7 +9802,7 @@ function BrandedOverlayGraphic({ overlay }) {
 
     render();
     return () => { cancelled = true; };
-  }, [overlay, renderNonce]);
+  }, [overlay, renderNonce, tourSelectedUrls]);
 
   if (!overlay) return null;
 
@@ -9827,6 +9862,49 @@ function BrandedOverlayGraphic({ overlay }) {
               ↻ Try another style
             </button>
           )}
+        </div>
+      )}
+      {overlay.isTour && Array.isArray(overlay.tourPhotos) && overlay.tourPhotos.length >= 2 && tourSelectedUrls && (
+        <div style={{ marginTop: 12, padding: "10px 12px", background: C.card ? C.card : "#FBF9F4", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          <div style={{ fontSize: 11, color: C.taupe, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+            Pick photos for the tour — {tourSelectedUrls.size} of {overlay.tourPhotos.length} selected (min 2, max 6)
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {overlay.tourPhotos.map((p, i) => {
+              const isSelected = tourSelectedUrls.has(p.url);
+              const order = isSelected
+                ? Array.from(tourSelectedUrls).indexOf(p.url) + 1
+                : 0;
+              return (
+                <button
+                  key={i}
+                  onClick={() => toggleTourPhoto(p.url)}
+                  style={{
+                    position: "relative", width: 72, height: 72,
+                    borderRadius: 6, overflow: "hidden",
+                    border: isSelected ? `3px solid ${C.red}` : `2px solid ${C.line}`,
+                    padding: 0, cursor: "pointer", background: "transparent",
+                    opacity: isSelected ? 1 : 0.55,
+                  }}
+                  title={isSelected ? "Click to remove from tour" : "Click to add to tour"}>
+                  <img src={p.url} alt={`photo ${i + 1}`}
+                       style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                  {isSelected && (
+                    <div style={{
+                      position: "absolute", top: 2, right: 2,
+                      width: 22, height: 22, borderRadius: "50%",
+                      background: C.red, color: "#fff", fontSize: 12, fontWeight: 700,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                    }}>{order}</div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 11, color: C.taupe, marginTop: 8, fontStyle: "italic" }}>
+            Tap a photo to add or remove. The number shows its position in the tour (1 = first/biggest). Changes rebuild the tour automatically.
+          </div>
         </div>
       )}
       <canvas ref={canvasRef} style={{ display: "none" }} />

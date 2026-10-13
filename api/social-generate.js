@@ -605,14 +605,21 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     isCover: p.isCover,
   }));
 
-  // Phase D1+D2+D3+F: Detect overlay template and attach rendering instructions.
+  // Phase D1+D2+D3+F+H: Detect overlay template and attach rendering instructions.
   // The frontend composes the branded image using HTML Canvas.
   // - Uploaded photo: send the data URL + optional label from trigger words
   // - Single mentioned listing: send one listing + random style
   // - Multiple mentioned listings: send all listings + collage style
+  // - Photo-tour intent on a single listing: send multiple photos from that
+  //   one listing in a photo-tour grid
   let overlay = null;
   const firstMentioned = mentioned[0] || null;
   const overlayInfo = detectOverlayTemplate(lastText, firstMentioned);
+
+  // Phase H: Photo-tour intent detection. Jesse can ask for "photo tour",
+  // "photo gallery", "gallery", "N photos", "interior photos", or "more photos"
+  // of a SINGLE listing — we show up to 6 photos in one branded grid.
+  const photoTourIntent = /\b(photo\s+tour|photo\s+gallery|photos?\s+gallery|interior\s+photos|more\s+photos|multiple\s+photos|all\s+the\s+photos|\d+\s+photos?|photo\s+collage|photo\s+roundup|tour\s+of\s+the\s+(home|house|listing))\b/i.test(lastText);
 
   // Phase F: Uploaded-photo path takes priority when Jesse attached his own photo
   if (parsedUpload) {
@@ -625,6 +632,27 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       listings: null,
       isMulti: false,
       isUploaded: true,
+    };
+  } else if (photoTourIntent && mentioned.length === 1 && photoAtt.length >= 2) {
+    // Phase H: Single-listing photo tour. Use up to 6 photos (cover first).
+    const tourPhotos = photoAtt.slice(0, 6).map(p => ({ url: p.url, isCover: p.isCover }));
+    const m = mentioned[0];
+    let badgePrice = overlayInfo && overlayInfo.args.subtitle ? overlayInfo.args.subtitle : "";
+    if (!badgePrice && m.listPrice) {
+      badgePrice = `$${Number(m.listPrice).toLocaleString()}`;
+    }
+    overlay = {
+      template: overlayInfo ? overlayInfo.template : "PHOTO_TOUR",
+      label: overlayInfo ? templateLabel(overlayInfo.template) : "PHOTO TOUR",
+      subtitle: badgePrice,
+      sourceUrl: tourPhotos[0].url,
+      listing: {
+        address: m.address || "", city: m.city || "", state: m.state || "",
+        beds: m.beds || null, baths: m.baths || null, sqft: m.sqft || null,
+        listPrice: m.listPrice || null,
+      },
+      tourPhotos,
+      isTour: true,
     };
   } else if (overlayInfo && photoAtt.length > 0) {
     // Group photos by their listingId so we can find each listing's cover

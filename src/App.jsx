@@ -8647,6 +8647,126 @@ const REMAX_LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAA
 
 // STYLE 1 — "Clean Classic": badge top-left, photo, red stripe, white info
 // section with address + specs, navy footer with logo + team contact.
+// STYLE — "Instagram Story (9:16)": vertical 1080x1920 variant designed for
+// Stories and Reels covers. Photo takes the top 55%, red stripe, cream info
+// block in the middle with the address, and a tall navy footer with centered
+// logo + team contact. Rendered automatically alongside single-listing and
+// uploaded-photo graphics so Jesse gets both a feed version and a story
+// version in one go.
+function renderStoryStyle(canvas, payload) {
+  const { img, logoImg, colors, label, subtitle, addrLine, specLine } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const W = 1080;
+  const H = 1920;
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  // Cream background
+  ctx.fillStyle = CREAM;
+  ctx.fillRect(0, 0, W, H);
+
+  // ─── Photo (top 55% ≈ 1056px) ───
+  const photoH = 1056;
+  const srcRatio = img.naturalWidth / img.naturalHeight;
+  const cellRatio = W / photoH;
+  let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+  if (srcRatio > cellRatio) {
+    sw = img.naturalHeight * cellRatio;
+    sx = (img.naturalWidth - sw) / 2;
+  } else {
+    sh = img.naturalWidth / cellRatio;
+    sy = (img.naturalHeight - sh) / 2;
+  }
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, photoH);
+
+  // ─── Badge top-right of photo (red block with label + subtitle) ───
+  if (label) {
+    const bFont = 42;
+    const sFont = 30;
+    ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+    const lW = ctx.measureText(label).width;
+    let sW_ = 0;
+    if (subtitle) { ctx.font = `700 ${sFont}px 'Helvetica Neue', Arial, sans-serif`; sW_ = ctx.measureText(subtitle).width; }
+    const bPadX = 28;
+    const bPadY = 16;
+    const bW = Math.max(lW, sW_) + bPadX * 2;
+    const bH = bFont + (subtitle ? sFont + 10 : 0) + bPadY * 2;
+    const margin = 40;
+    const bX = W - bW - margin;
+    const bY = margin;
+    ctx.fillStyle = RED;
+    ctx.fillRect(bX, bY, bW, bH);
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+    const lY = subtitle ? bY + bPadY + bFont * 0.55 : bY + bH / 2;
+    ctx.fillText(label, bX + bW / 2, lY);
+    if (subtitle) {
+      ctx.font = `700 ${sFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(subtitle, bX + bW / 2, lY + bFont * 0.75);
+    }
+  }
+
+  // Red stripe
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, photoH, W, 12);
+
+  // ─── Middle cream block: address + specs ───
+  const midY = photoH + 12;
+  const midH = 420;
+  if (addrLine || specLine) {
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    if (addrLine && specLine) {
+      ctx.fillStyle = NAVY;
+      let addrFont = 72;
+      ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      while (ctx.measureText(addrLine).width > W - 80 && addrFont > 36) {
+        addrFont -= 4;
+        ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      }
+      ctx.fillText(addrLine, W / 2, midY + midH * 0.4);
+      ctx.fillStyle = "#4A453D";
+      ctx.font = `600 42px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specLine, W / 2, midY + midH * 0.72);
+    } else if (addrLine) {
+      ctx.fillStyle = NAVY;
+      let addrFont = 68;
+      ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      while (ctx.measureText(addrLine).width > W - 80 && addrFont > 36) {
+        addrFont -= 4;
+        ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      }
+      ctx.fillText(addrLine, W / 2, midY + midH / 2);
+    } else if (specLine) {
+      ctx.fillStyle = NAVY;
+      ctx.font = `600 48px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specLine, W / 2, midY + midH / 2);
+    }
+  }
+
+  // ─── Bottom navy footer ───
+  const footerY = midY + midH;
+  const footerH = H - footerY;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, W, footerH);
+
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = 100;
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, (W - logoW) / 2, footerY + 50, logoW, logoH);
+  }
+
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `900 54px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", W / 2, footerY + 220);
+  ctx.font = `600 36px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("RE/MAX PREMIER GROUP", W / 2, footerY + 275);
+  ctx.font = `500 32px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("360-431-5915  •  jessecope@remax.net", W / 2, footerY + 330);
+}
+
 // STYLE — "Uploaded Plain": for a photo Jesse uploaded himself with no
 // trigger-word label (team event, celebration, etc.). Just the photo with
 // a navy branding footer — no top badge, no listing info.
@@ -9601,6 +9721,9 @@ function renderCollageStyle(canvas, payload) {
 function BrandedOverlayGraphic({ overlay }) {
   const canvasRef = useRef(null);
   const [dataUrl, setDataUrl] = useState("");
+  // Companion 9:16 Instagram Story version, rendered alongside the main graphic
+  // for single-listing and uploaded-photo cases.
+  const [storyDataUrl, setStoryDataUrl] = useState("");
   const [rendering, setRendering] = useState(true);
   const [error, setError] = useState("");
   const [styleUsed, setStyleUsed] = useState("");
@@ -9642,6 +9765,7 @@ function BrandedOverlayGraphic({ overlay }) {
     const render = async () => {
       setRendering(true);
       setError("");
+      setStoryDataUrl(""); // Clear any stale story version
       try {
         // Load the RE/MAX logo (embedded base64 — always available)
         const logoImg = new Image();
@@ -9748,6 +9872,11 @@ function BrandedOverlayGraphic({ overlay }) {
           else if (styleName === "MINIMAL") renderMinimalLuxuryStyle(canvas, payload);
           else if (styleName === "FILM_STRIP") renderFilmStripStyle(canvas, payload);
           else renderUploadedPlainStyle(canvas, payload);
+
+          // Also render the Instagram Story (9:16) companion for uploaded photos
+          const storyCanvas = document.createElement("canvas");
+          renderStoryStyle(storyCanvas, payload);
+          if (!cancelled) setStoryDataUrl(storyCanvas.toDataURL("image/jpeg", 0.92));
         } else {
           // ─── SINGLE-LISTING PATH ───
           const img = new Image();
@@ -9784,6 +9913,11 @@ function BrandedOverlayGraphic({ overlay }) {
           else if (styleName === "SPLIT_BANNER") renderSplitBannerStyle(canvas, payload);
           else if (styleName === "MINIMAL") renderMinimalLuxuryStyle(canvas, payload);
           else renderFilmStripStyle(canvas, payload);
+
+          // Also render the Instagram Story (9:16) companion
+          const storyCanvas = document.createElement("canvas");
+          renderStoryStyle(storyCanvas, payload);
+          if (!cancelled) setStoryDataUrl(storyCanvas.toDataURL("image/jpeg", 0.92));
         }
 
         const out = canvas.toDataURL("image/jpeg", 0.92);
@@ -9847,8 +9981,14 @@ function BrandedOverlayGraphic({ overlay }) {
             <img src={dataUrl} alt="Branded listing graphic" style={{ width: "100%", height: "auto", display: "block" }} />
             <a href={dataUrl} download={`${(overlay.template || "branded").toLowerCase()}-${(styleUsed || "").toLowerCase()}.jpg`}
                style={{ display: "block", padding: "8px 10px", background: C.red, color: "#fff", fontSize: 12, textAlign: "center", textDecoration: "none", fontWeight: 600 }}>
-              Download graphic
+              Download graphic (feed)
             </a>
+            {storyDataUrl && (
+              <a href={storyDataUrl} download={`${(overlay.template || "branded").toLowerCase()}-story.jpg`}
+                 style={{ display: "block", padding: "8px 10px", background: "#1A2C47", color: "#fff", fontSize: 12, textAlign: "center", textDecoration: "none", fontWeight: 600, borderTop: "1px solid rgba(255,255,255,0.15)" }}>
+                📱 Download for Story (9:16)
+              </a>
+            )}
           </div>
           {canReroll && (
             <button

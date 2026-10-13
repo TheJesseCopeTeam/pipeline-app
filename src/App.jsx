@@ -8647,6 +8647,42 @@ const REMAX_LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAA
 
 // STYLE 1 — "Clean Classic": badge top-left, photo, red stripe, white info
 // section with address + specs, navy footer with logo + team contact.
+// STYLE — "Uploaded Plain": for a photo Jesse uploaded himself with no
+// trigger-word label (team event, celebration, etc.). Just the photo with
+// a navy branding footer — no top badge, no listing info.
+function renderUploadedPlainStyle(canvas, payload) {
+  const { img, logoImg, colors } = payload;
+  const { NAVY, CREAM } = colors;
+  const photoW = img.naturalWidth;
+  const photoH = img.naturalHeight;
+  const footerH = Math.round(photoH * 0.085);
+  canvas.width = photoW;
+  canvas.height = photoH + footerH;
+  const ctx = canvas.getContext("2d");
+  const imgW = canvas.width;
+  const imgH = canvas.height;
+  ctx.drawImage(img, 0, 0, photoW, photoH);
+
+  // Navy footer with logo on left + team on right
+  const footerY = imgH - footerH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, imgW, footerH);
+  const fpadX = Math.round(imgW * 0.025);
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(footerH * 0.55);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+  }
+  const fFont = Math.round(footerH * 0.26);
+  const fsFont = Math.round(fFont * 0.85);
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", imgW - fpadX, footerY + footerH * 0.37);
+  ctx.font = `500 ${fsFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("PREMIER GROUP  •  360-431-5915", imgW - fpadX, footerY + footerH * 0.72);
+}
+
 function renderCleanStyle(canvas, payload) {
   const { img, logoImg, colors, label, subtitle, addrLine, specLine, hasInfo } = payload;
   const { NAVY, RED, CREAM, WHITE } = colors;
@@ -9183,6 +9219,33 @@ function BrandedOverlayGraphic({ overlay }) {
             label: overlay.label || "",
           });
           styleName = "COLLAGE";
+        } else if (overlay.isUploaded) {
+          // ─── UPLOADED-PHOTO PATH ───
+          // Jesse attached his own photo. No listing info to display.
+          // Pick between CLEAN and MAGAZINE (both work well with no address/specs).
+          const img = new Image();
+          // Data URLs don't need crossOrigin; a regular URL would.
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = () => reject(new Error("Could not load uploaded photo"));
+            img.src = overlay.sourceUrl;
+          });
+          if (cancelled) return;
+
+          const payload = {
+            img, logoImg, colors,
+            label: overlay.label || "",
+            subtitle: overlay.subtitle || "",
+            addrLine: "", specLine: "",
+            hasInfo: false,
+          };
+
+          const styles = overlay.label ? ["CLEAN", "MAGAZINE"] : ["UPLOADED_PLAIN"];
+          styleName = styles[Math.floor(Math.random() * styles.length)];
+
+          if (styleName === "CLEAN") renderCleanStyle(canvas, payload);
+          else if (styleName === "MAGAZINE") renderMagazineStyle(canvas, payload);
+          else renderUploadedPlainStyle(canvas, payload);
         } else {
           // ─── SINGLE-LISTING PATH ───
           const img = new Image();
@@ -9248,9 +9311,11 @@ function BrandedOverlayGraphic({ overlay }) {
     SIDE_PANEL: "Bold Side Panel",
     MAGAZINE: "Magazine Feature",
     COLLAGE: "Multi-Listing Collage",
+    UPLOADED_PLAIN: "Branded Photo",
   };
-  // "Try another style" doesn't apply to collages (they only have one layout)
-  const canReroll = styleUsed !== "COLLAGE";
+  // "Try another style" doesn't apply to collages or label-free uploads
+  // (each has only one layout to choose from).
+  const canReroll = styleUsed !== "COLLAGE" && styleUsed !== "UPLOADED_PLAIN";
 
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
@@ -9329,7 +9394,47 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
   const [error, setError] = useState("");
   const [copiedId, setCopiedId] = useState("");
   const [showOverlayHints, setShowOverlayHints] = useState(false);
+  // Phase F: uploaded-photo mode. Jesse can attach a photo (team event,
+  // celebration, hiring post, etc.) and get a branded graphic back without
+  // a listing. We keep the full data URL in memory for this send only; it
+  // isn't persisted to localStorage (would blow up the quota) and clears
+  // after send.
+  const [uploadedPhoto, setUploadedPhoto] = useState("");
+  const [uploadedPhotoName, setUploadedPhotoName] = useState("");
+  const fileInputRef = useRef(null);
   const scrollRef = useRef(null);
+
+  function handlePhotoPick(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    // Guard against unreasonable sizes (>14MB raw ~= ~18MB base64 which
+    // exceeds our serverless body limit).
+    if (file.size > 14 * 1024 * 1024) {
+      setError("That photo is too large — please pick one under 14MB.");
+      e.target.value = "";
+      return;
+    }
+    if (!/^image\//.test(file.type)) {
+      setError("Please pick an image file (JPG or PNG).");
+      e.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setUploadedPhoto(reader.result);
+      setUploadedPhotoName(file.name || "photo");
+      setError("");
+    };
+    reader.onerror = () => setError("Couldn't read that file — try another photo.");
+    reader.readAsDataURL(file);
+    // Reset so the same file can be re-picked after clearing
+    e.target.value = "";
+  }
+
+  function clearUploadedPhoto() {
+    setUploadedPhoto("");
+    setUploadedPhotoName("");
+  }
 
   // Brand palette
   const C = {
@@ -9358,7 +9463,22 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
     setError("");
     setInput("");
 
-    const userMsg = { id: newId(), role: "user", content: text, ts: Date.now() };
+    // Snapshot the uploaded photo so clearing state right away doesn't
+    // kill this send, and so the next send doesn't accidentally reuse it.
+    const photoForSend = uploadedPhoto;
+    const photoNameForSend = uploadedPhotoName;
+    clearUploadedPhoto();
+
+    const userMsg = {
+      id: newId(),
+      role: "user",
+      content: text,
+      // Flag the user bubble so it can show "📎 photo.jpg" without
+      // persisting the full data URL to localStorage.
+      hasUpload: !!photoForSend,
+      uploadName: photoNameForSend || "",
+      ts: Date.now(),
+    };
     const nextMessages = [...messages, userMsg];
     setMessages(nextMessages);
     setLoading(true);
@@ -9390,6 +9510,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
           mode: "chat",
           messages: nextMessages.map(m => ({ role: m.role, content: m.content })),
           activeListings: listingContext,
+          // Phase F: Jesse's own uploaded photo (data URL) when attached
+          uploadedPhoto: photoForSend || undefined,
         }),
       });
       const data = await res.json();
@@ -9491,6 +9613,9 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
               Just tell me what you want \u2014 like you would in a text message.
               {activeListings.length > 0 && ` I can see your ${activeListings.length} active listing${activeListings.length === 1 ? "" : "s"} and will pull their details when you mention them.`}
             </p>
+            <p style={{ ...s.welcomeHint, fontSize: 12, fontStyle: "italic" }}>
+              Tap the \ud83d\udcce to attach your own photo for a non-listing post \u2014 team event, closing celebration, hiring, etc.
+            </p>
             <div style={s.exampleGrid}>
               {examples.map((ex, i) => (
                 <button key={i} style={s.exampleBtn} onClick={() => pickExample(ex)}>
@@ -9503,7 +9628,15 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
           messages.map(m => (
             <div key={m.id} style={s.msgRow(m.role === "user")}>
               {m.role === "user" ? (
-                <div style={s.userBubble}>{m.content}</div>
+                <div style={s.userBubble}>
+                  {m.hasUpload && (
+                    <div style={{ fontSize: 11, opacity: 0.75, marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}>
+                      <span>📎</span>
+                      <span style={{ fontStyle: "italic" }}>{m.uploadName || "attached photo"}</span>
+                    </div>
+                  )}
+                  {m.content}
+                </div>
               ) : (
                 <div style={s.aiBubble}>
                   {m.content}
@@ -9588,15 +9721,66 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         )}
       </div>
 
+      {uploadedPhoto && (
+        <div style={{
+          marginTop: 8, padding: "6px 10px", background: C.card,
+          border: `1px solid ${C.line}`, borderRadius: 8, flexShrink: 0,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <img
+            src={uploadedPhoto}
+            alt="upload preview"
+            style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 4, border: `1px solid ${C.line}` }}
+          />
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              \ud83d\udcce {uploadedPhotoName || "photo"}
+            </div>
+            <div style={{ fontSize: 11, color: C.taupe }}>
+              Will be used as the base image for your post
+            </div>
+          </div>
+          <button
+            onClick={clearUploadedPhoto}
+            style={{
+              padding: "4px 10px", border: `1px solid ${C.line}`, background: "#fff",
+              color: C.ink, borderRadius: 4, fontFamily: serif, fontSize: 12, cursor: "pointer",
+            }}>
+            Remove
+          </button>
+        </div>
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={handlePhotoPick}
+        style={{ display: "none" }}
+      />
       <div style={s.inputRow}>
+        <button
+          onClick={() => fileInputRef.current && fileInputRef.current.click()}
+          disabled={loading}
+          title="Attach a photo for a non-listing post (team event, celebration, hiring, etc.)"
+          style={{
+            padding: "0 12px", border: `1px solid ${C.line}`,
+            borderRadius: 10, background: uploadedPhoto ? C.red : C.card,
+            color: uploadedPhoto ? "#fff" : C.ink,
+            fontFamily: serif, fontSize: 18, cursor: loading ? "default" : "pointer",
+            minWidth: 48, display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+          \ud83d\udcce
+        </button>
         <textarea
           style={s.input}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={activeListings.length > 0
-            ? "e.g. \"create a just-listed post for 1745 23rd\" or \"write a market update\"\u2026"
-            : "e.g. \"write a market update post\"\u2026"}
+          placeholder={uploadedPhoto
+            ? "e.g. \"team happy hour post\" or \"we're hiring\" (your uploaded photo will be branded)\u2026"
+            : (activeListings.length > 0
+              ? "e.g. \"create a just-listed post for 1745 23rd\" or \"write a market update\"\u2026"
+              : "e.g. \"write a market update post\"\u2026")}
           rows={1}
         />
         <button style={s.sendBtn} onClick={send} disabled={loading || !input.trim()}>

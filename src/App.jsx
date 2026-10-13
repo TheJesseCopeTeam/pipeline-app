@@ -8969,6 +8969,284 @@ function renderMagazineStyle(canvas, payload) {
   ctx.fillText("THE JESSE COPE TEAM  •  360-431-5915", photoW - margin, bottomY);
 }
 
+// STYLE — "Split Banner": clean modern layout. Photo on top; a solid red
+// stripe cuts across with the label centered in white; a cream info block
+// below carries address + specs in bold serif; navy footer with team info.
+// Reads as polished, graphic-design professional.
+function renderSplitBannerStyle(canvas, payload) {
+  const { img, logoImg, colors, label, subtitle, addrLine, specLine } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const photoW = img.naturalWidth;
+  const photoH = img.naturalHeight;
+  const bannerH = Math.round(photoH * 0.11);
+  const infoH = (addrLine || specLine) ? Math.round(photoH * 0.14) : 0;
+  const footerH = Math.round(photoH * 0.085);
+  canvas.width = photoW;
+  canvas.height = photoH + bannerH + infoH + footerH;
+  const ctx = canvas.getContext("2d");
+  const imgW = canvas.width;
+  const imgH = canvas.height;
+  ctx.drawImage(img, 0, 0, photoW, photoH);
+
+  // ─── Red banner strip ───
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, photoH, imgW, bannerH);
+  const bFont = Math.round(bannerH * 0.42);
+  const bsFont = Math.round(bFont * 0.72);
+  ctx.fillStyle = WHITE;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+  if (subtitle) {
+    ctx.fillText(label, imgW / 2, photoH + bannerH * 0.38);
+    ctx.font = `700 ${bsFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillText(subtitle, imgW / 2, photoH + bannerH * 0.72);
+  } else {
+    ctx.fillText(label, imgW / 2, photoH + bannerH / 2);
+  }
+
+  // ─── Cream info block ───
+  if (infoH > 0) {
+    const infoY = photoH + bannerH;
+    ctx.fillStyle = CREAM;
+    ctx.fillRect(0, infoY, imgW, infoH);
+    const addrFont = Math.round(infoH * 0.28);
+    const specFont = Math.round(infoH * 0.18);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    if (addrLine && specLine) {
+      ctx.fillStyle = NAVY;
+      ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      ctx.fillText(addrLine, imgW / 2, infoY + infoH * 0.36);
+      ctx.fillStyle = "#4A453D";
+      ctx.font = `600 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specLine, imgW / 2, infoY + infoH * 0.72);
+    } else if (addrLine) {
+      ctx.fillStyle = NAVY;
+      ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      ctx.fillText(addrLine, imgW / 2, infoY + infoH / 2);
+    } else if (specLine) {
+      ctx.fillStyle = NAVY;
+      ctx.font = `700 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specLine, imgW / 2, infoY + infoH / 2);
+    }
+  }
+
+  // ─── Navy footer ───
+  const footerY = imgH - footerH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, imgW, footerH);
+  const fpadX = Math.round(imgW * 0.025);
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(footerH * 0.55);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+  }
+  const fFont = Math.round(footerH * 0.26);
+  const fsFont = Math.round(fFont * 0.85);
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", imgW - fpadX, footerY + footerH * 0.37);
+  ctx.font = `500 ${fsFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("PREMIER GROUP  •  360-431-5915", imgW - fpadX, footerY + footerH * 0.72);
+}
+
+// STYLE — "Minimal Luxury": editorial / high-end feel. Full photo with a thin
+// inset white hairline border, a small pill badge in the top-right, elegant
+// serif address text in the bottom-left on a soft gradient, small logo + team
+// contact anchored to the bottom-right. No big footer bar — reads as upscale.
+function renderMinimalLuxuryStyle(canvas, payload) {
+  const { img, logoImg, colors, label, subtitle, addrLine, specLine } = payload;
+  const { RED, CREAM, WHITE } = colors;
+  const photoW = img.naturalWidth;
+  const photoH = img.naturalHeight;
+  canvas.width = photoW;
+  canvas.height = photoH;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, photoW, photoH);
+
+  // ─── Soft gradient at the bottom-left for text contrast ───
+  const grad = ctx.createLinearGradient(0, photoH * 0.6, 0, photoH);
+  grad.addColorStop(0, "rgba(10,18,33,0)");
+  grad.addColorStop(1, "rgba(10,18,33,0.72)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, Math.round(photoH * 0.6), photoW, Math.round(photoH * 0.4));
+
+  // ─── Thin inset hairline border for editorial feel ───
+  const insetPx = Math.round(photoH * 0.025);
+  const borderPx = Math.max(2, Math.round(photoH * 0.004));
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = borderPx;
+  ctx.strokeRect(insetPx, insetPx, photoW - insetPx * 2, photoH - insetPx * 2);
+
+  // ─── Rounded pill badge, top-right ───
+  if (label) {
+    const bFont = Math.round(photoH * 0.028);
+    const sFont = Math.round(bFont * 0.78);
+    ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+    const lW = ctx.measureText(label).width;
+    let sW = 0;
+    if (subtitle) { ctx.font = `700 ${sFont}px 'Helvetica Neue', Arial, sans-serif`; sW = ctx.measureText(subtitle).width; }
+    const bPadX = Math.round(bFont * 1.2);
+    const bPadY = Math.round(bFont * 0.6);
+    const bW = Math.max(lW, sW) + bPadX * 2;
+    const bH = bFont + (subtitle ? sFont + Math.round(bFont * 0.35) : 0) + bPadY * 2;
+    const margin = Math.round(photoH * 0.055);
+    const bX = photoW - bW - margin;
+    const bY = margin;
+    const r = bH / 2;
+    // Rounded pill
+    ctx.fillStyle = RED;
+    ctx.beginPath();
+    ctx.moveTo(bX + r, bY);
+    ctx.lineTo(bX + bW - r, bY);
+    ctx.quadraticCurveTo(bX + bW, bY, bX + bW, bY + r);
+    ctx.lineTo(bX + bW, bY + bH - r);
+    ctx.quadraticCurveTo(bX + bW, bY + bH, bX + bW - r, bY + bH);
+    ctx.lineTo(bX + r, bY + bH);
+    ctx.quadraticCurveTo(bX, bY + bH, bX, bY + bH - r);
+    ctx.lineTo(bX, bY + r);
+    ctx.quadraticCurveTo(bX, bY, bX + r, bY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+    const lY = subtitle ? bY + bPadY + bFont * 0.55 : bY + bH / 2;
+    ctx.fillText(label, bX + bW / 2, lY);
+    if (subtitle) {
+      ctx.font = `700 ${sFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(subtitle, bX + bW / 2, lY + bFont * 0.75);
+    }
+  }
+
+  // ─── Address, bottom-left in elegant serif ───
+  const margin = Math.round(photoH * 0.055);
+  const addrFont = Math.round(photoH * 0.045);
+  const specFont = Math.round(photoH * 0.023);
+  const teamFont = Math.round(photoH * 0.02);
+  const bottomY = photoH - margin;
+
+  // Small red accent bar above address
+  if (addrLine || specLine) {
+    ctx.fillStyle = RED;
+    ctx.fillRect(margin, bottomY - Math.round(photoH * 0.11),
+                 Math.round(photoW * 0.07), Math.max(3, Math.round(photoH * 0.005)));
+  }
+
+  if (addrLine) {
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.font = `700 ${addrFont}px Georgia, 'Times New Roman', serif`;
+    ctx.fillText(addrLine, margin, bottomY - Math.round(photoH * 0.055));
+  }
+  if (specLine) {
+    ctx.fillStyle = "rgba(245, 241, 232, 0.9)";
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.font = `500 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillText(specLine, margin, bottomY - Math.round(photoH * 0.025));
+  }
+
+  // ─── Small logo + team contact, bottom-right ───
+  const bottomRightY = photoH - margin;
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(photoH * 0.035);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, photoW - logoW - margin, bottomRightY - logoH - Math.round(teamFont * 1.6), logoW, logoH);
+  }
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "alphabetic";
+  ctx.font = `700 ${teamFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM  •  360-431-5915", photoW - margin, bottomRightY);
+}
+
+// STYLE — "Film Strip": cinematic letterboxed look. Thin navy bar at the top
+// with the label on the left and price on the right; thin navy bar at the
+// bottom with logo + team on the left and address + specs on the right. The
+// photo sits full-width in the middle. Reads as modern, widescreen, premium.
+function renderFilmStripStyle(canvas, payload) {
+  const { img, logoImg, colors, label, subtitle, addrLine, specLine } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const photoW = img.naturalWidth;
+  const photoH = img.naturalHeight;
+  const topBarH = Math.round(photoH * 0.085);
+  const bottomBarH = Math.round(photoH * 0.11);
+  canvas.width = photoW;
+  canvas.height = photoH + topBarH + bottomBarH;
+  const ctx = canvas.getContext("2d");
+  const imgW = canvas.width;
+  const imgH = canvas.height;
+
+  // ─── Top navy bar ───
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, 0, imgW, topBarH);
+  const tFont = Math.round(topBarH * 0.42);
+  const tsFont = Math.round(tFont * 0.78);
+  const tPadX = Math.round(imgW * 0.025);
+  // Label on left
+  if (label) {
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.font = `900 ${tFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillText(label, tPadX, topBarH / 2);
+  }
+  // Price (subtitle) on right in red
+  if (subtitle) {
+    ctx.fillStyle = RED;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    ctx.font = `800 ${tsFont}px 'Helvetica Neue', Arial, sans-serif`;
+    // Measure to add a small red accent bar before it
+    const sW = ctx.measureText(subtitle).width;
+    const accentY = Math.round(topBarH * 0.5);
+    const accentX2 = imgW - tPadX - sW - Math.round(tsFont * 0.5);
+    ctx.fillRect(accentX2 - Math.round(tsFont * 0.6), accentY - Math.max(2, Math.round(tsFont * 0.1)),
+                 Math.round(tsFont * 0.6), Math.max(4, Math.round(tsFont * 0.2)));
+    ctx.fillStyle = CREAM;
+    ctx.fillText(subtitle, imgW - tPadX, topBarH / 2);
+  }
+
+  // ─── Photo in the middle ───
+  ctx.drawImage(img, 0, topBarH, photoW, photoH);
+
+  // ─── Bottom navy bar ───
+  const botY = topBarH + photoH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, botY, imgW, bottomBarH);
+  // Logo + team on LEFT
+  const bPadX = Math.round(imgW * 0.025);
+  let leftCursor = bPadX;
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const lH = Math.round(bottomBarH * 0.5);
+    const lW = Math.round(lH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, leftCursor, botY + (bottomBarH - lH) / 2, lW, lH);
+    leftCursor += lW + Math.round(bottomBarH * 0.15);
+  }
+  const teamFont = Math.round(bottomBarH * 0.22);
+  const teamSubFont = Math.round(teamFont * 0.82);
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.font = `800 ${teamFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", leftCursor, botY + bottomBarH * 0.38);
+  ctx.font = `500 ${teamSubFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("360-431-5915", leftCursor, botY + bottomBarH * 0.72);
+
+  // Address + specs on RIGHT
+  if (addrLine || specLine) {
+    const addrFont = Math.round(bottomBarH * 0.24);
+    const specFont = Math.round(bottomBarH * 0.18);
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    if (addrLine) {
+      ctx.fillStyle = WHITE;
+      ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+      ctx.fillText(addrLine, imgW - bPadX, botY + bottomBarH * (specLine ? 0.38 : 0.5));
+    }
+    if (specLine) {
+      ctx.fillStyle = "#B8C2D6";
+      ctx.font = `600 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specLine, imgW - bPadX, botY + bottomBarH * (addrLine ? 0.72 : 0.5));
+    }
+  }
+}
+
 // STYLE 4 — "Multi-Listing Collage": multiple properties in one graphic.
 // Layout depends on count:
 //   2 listings → side-by-side (2 columns)
@@ -9240,11 +9518,16 @@ function BrandedOverlayGraphic({ overlay }) {
             hasInfo: false,
           };
 
-          const styles = overlay.label ? ["CLEAN", "MAGAZINE"] : ["UPLOADED_PLAIN"];
+          const styles = overlay.label
+            ? ["CLEAN", "MAGAZINE", "SPLIT_BANNER", "MINIMAL", "FILM_STRIP"]
+            : ["UPLOADED_PLAIN"];
           styleName = styles[Math.floor(Math.random() * styles.length)];
 
           if (styleName === "CLEAN") renderCleanStyle(canvas, payload);
           else if (styleName === "MAGAZINE") renderMagazineStyle(canvas, payload);
+          else if (styleName === "SPLIT_BANNER") renderSplitBannerStyle(canvas, payload);
+          else if (styleName === "MINIMAL") renderMinimalLuxuryStyle(canvas, payload);
+          else if (styleName === "FILM_STRIP") renderFilmStripStyle(canvas, payload);
           else renderUploadedPlainStyle(canvas, payload);
         } else {
           // ─── SINGLE-LISTING PATH ───
@@ -9273,12 +9556,15 @@ function BrandedOverlayGraphic({ overlay }) {
             hasInfo: !!(addrLine || specLine),
           };
 
-          const styles = ["CLEAN", "SIDE_PANEL", "MAGAZINE"];
+          const styles = ["CLEAN", "SIDE_PANEL", "MAGAZINE", "SPLIT_BANNER", "MINIMAL", "FILM_STRIP"];
           styleName = styles[Math.floor(Math.random() * styles.length)];
 
           if (styleName === "CLEAN") renderCleanStyle(canvas, payload);
           else if (styleName === "SIDE_PANEL") renderSidePanelStyle(canvas, payload);
-          else renderMagazineStyle(canvas, payload);
+          else if (styleName === "MAGAZINE") renderMagazineStyle(canvas, payload);
+          else if (styleName === "SPLIT_BANNER") renderSplitBannerStyle(canvas, payload);
+          else if (styleName === "MINIMAL") renderMinimalLuxuryStyle(canvas, payload);
+          else renderFilmStripStyle(canvas, payload);
         }
 
         const out = canvas.toDataURL("image/jpeg", 0.92);
@@ -9310,6 +9596,9 @@ function BrandedOverlayGraphic({ overlay }) {
     CLEAN: "Clean Classic",
     SIDE_PANEL: "Bold Side Panel",
     MAGAZINE: "Magazine Feature",
+    SPLIT_BANNER: "Split Banner",
+    MINIMAL: "Minimal Luxury",
+    FILM_STRIP: "Film Strip",
     COLLAGE: "Multi-Listing Collage",
     UPLOADED_PLAIN: "Branded Photo",
   };

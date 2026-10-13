@@ -8933,6 +8933,200 @@ function renderMagazineStyle(canvas, payload) {
   ctx.fillText("THE JESSE COPE TEAM  •  360-431-5915", photoW - margin, bottomY);
 }
 
+// STYLE 4 — "Multi-Listing Collage": multiple properties in one graphic.
+// Layout depends on count:
+//   2 listings → side-by-side (2 columns)
+//   3 listings → 1 large on left, 2 stacked on right
+//   4 listings → 2x2 grid
+//   5-6 listings → 3-across grid
+// Each cell shows photo + address + specs + price. Shared header with the
+// label (JUST LISTED, SOLD, etc.) and shared navy footer with team branding.
+function renderCollageStyle(canvas, payload) {
+  const { imgs, listings, logoImg, colors, label } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const n = Math.min(imgs.length, 6); // cap at 6
+
+  // Fixed output canvas size (1200x1200 — square, great for Instagram)
+  const outW = 1200;
+  const outH = 1200;
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+
+  // Full navy background
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, 0, outW, outH);
+
+  // ─── TOP HEADER ───
+  const headerH = Math.round(outH * 0.11);
+  // Red accent strip inside the navy header
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, 0, outW, headerH);
+
+  // Headline text (big, white, centered)
+  const headlineText = n > 1 ? `${label} - ${n} HOMES` : label;
+  ctx.fillStyle = WHITE;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const headlineSize = Math.round(headerH * 0.5);
+  ctx.font = `900 ${headlineSize}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText(headlineText, outW / 2, headerH / 2);
+
+  // Thin red divider
+  const dividerH = Math.max(4, Math.round(outH * 0.007));
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, headerH, outW, dividerH);
+
+  // ─── FOOTER ───
+  const footerH = Math.round(outH * 0.095);
+  const footerY = outH - footerH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, outW, footerH);
+  const fpadX = Math.round(outW * 0.025);
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(footerH * 0.55);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+  }
+  const fFont = Math.round(footerH * 0.26);
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", outW - fpadX, footerY + footerH * 0.37);
+  ctx.font = `500 ${Math.round(fFont * 0.85)}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("PREMIER GROUP  •  360-431-5915", outW - fpadX, footerY + footerH * 0.72);
+
+  // ─── COLLAGE AREA ───
+  const collageY = headerH + dividerH;
+  const collageH = footerY - collageY;
+  const gap = Math.round(outW * 0.015);
+  const outerPad = Math.round(outW * 0.025);
+
+  // Decide grid layout
+  let cells;
+  if (n === 2) {
+    const cellW = Math.floor((outW - outerPad * 2 - gap) / 2);
+    const cellH = collageH - outerPad * 2;
+    cells = [
+      { x: outerPad, y: collageY + outerPad, w: cellW, h: cellH, i: 0 },
+      { x: outerPad + cellW + gap, y: collageY + outerPad, w: cellW, h: cellH, i: 1 },
+    ];
+  } else if (n === 3) {
+    const bigW = Math.floor((outW - outerPad * 2 - gap) * 0.56);
+    const smallW = outW - outerPad * 2 - gap - bigW;
+    const totalH = collageH - outerPad * 2;
+    const smallH = Math.floor((totalH - gap) / 2);
+    cells = [
+      { x: outerPad, y: collageY + outerPad, w: bigW, h: totalH, i: 0 },
+      { x: outerPad + bigW + gap, y: collageY + outerPad, w: smallW, h: smallH, i: 1 },
+      { x: outerPad + bigW + gap, y: collageY + outerPad + smallH + gap, w: smallW, h: smallH, i: 2 },
+    ];
+  } else if (n === 4) {
+    const cellW = Math.floor((outW - outerPad * 2 - gap) / 2);
+    const cellH = Math.floor((collageH - outerPad * 2 - gap) / 2);
+    cells = [
+      { x: outerPad, y: collageY + outerPad, w: cellW, h: cellH, i: 0 },
+      { x: outerPad + cellW + gap, y: collageY + outerPad, w: cellW, h: cellH, i: 1 },
+      { x: outerPad, y: collageY + outerPad + cellH + gap, w: cellW, h: cellH, i: 2 },
+      { x: outerPad + cellW + gap, y: collageY + outerPad + cellH + gap, w: cellW, h: cellH, i: 3 },
+    ];
+  } else {
+    // 5-6 listings: 3 across, 2 rows (6 slots; 5 uses first 5)
+    const cols = 3;
+    const rows = Math.ceil(n / cols);
+    const cellW = Math.floor((outW - outerPad * 2 - gap * (cols - 1)) / cols);
+    const cellH = Math.floor((collageH - outerPad * 2 - gap * (rows - 1)) / rows);
+    cells = [];
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      cells.push({
+        x: outerPad + col * (cellW + gap),
+        y: collageY + outerPad + row * (cellH + gap),
+        w: cellW, h: cellH, i,
+      });
+    }
+  }
+
+  // Draw each cell: cover-crop the photo, then overlay a small gradient
+  // caption area at the bottom with address + price.
+  for (const cell of cells) {
+    const im = imgs[cell.i];
+    const listing = listings[cell.i];
+    if (!im) continue;
+
+    // Cover-fit crop
+    const srcAspect = im.naturalWidth / im.naturalHeight;
+    const dstAspect = cell.w / cell.h;
+    let sx = 0, sy = 0, sw = im.naturalWidth, sh = im.naturalHeight;
+    if (srcAspect > dstAspect) {
+      sw = Math.round(im.naturalHeight * dstAspect);
+      sx = Math.round((im.naturalWidth - sw) / 2);
+    } else {
+      sh = Math.round(im.naturalWidth / dstAspect);
+      sy = Math.round((im.naturalHeight - sh) / 2);
+    }
+    ctx.drawImage(im, sx, sy, sw, sh, cell.x, cell.y, cell.w, cell.h);
+
+    // Caption gradient at bottom of cell
+    const capH = Math.round(cell.h * 0.3);
+    const grad = ctx.createLinearGradient(cell.x, cell.y + cell.h - capH, cell.x, cell.y + cell.h);
+    grad.addColorStop(0, "rgba(10,18,33,0)");
+    grad.addColorStop(0.5, "rgba(10,18,33,0.55)");
+    grad.addColorStop(1, "rgba(10,18,33,0.9)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(cell.x, cell.y + cell.h - capH, cell.w, capH);
+
+    // Caption text
+    const capPadX = Math.round(cell.w * 0.045);
+    const addrFont = Math.max(14, Math.round(cell.h * 0.065));
+    const priceFont = Math.max(13, Math.round(cell.h * 0.055));
+    const specFont = Math.max(11, Math.round(cell.h * 0.038));
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    const addr = listing.address || "";
+    ctx.fillStyle = WHITE;
+    ctx.font = `800 ${addrFont}px 'Helvetica Neue', Arial, sans-serif`;
+    // Trim long addresses
+    let trimmed = addr;
+    const maxW = cell.w - capPadX * 2;
+    while (trimmed && ctx.measureText(trimmed).width > maxW) {
+      trimmed = trimmed.slice(0, -1);
+    }
+    if (trimmed.length < addr.length) trimmed = trimmed.slice(0, -1) + "…";
+    const addrY = cell.y + cell.h - capPadX - specFont - priceFont * 0.4;
+    ctx.fillText(trimmed, cell.x + capPadX, addrY);
+
+    // Specs line
+    const specs = [];
+    if (listing.beds) specs.push(`${listing.beds} BD`);
+    if (listing.baths) specs.push(`${listing.baths} BA`);
+    if (listing.sqft) specs.push(`${Number(listing.sqft).toLocaleString()} SF`);
+    if (specs.length > 0) {
+      ctx.fillStyle = "rgba(245, 241, 232, 0.85)";
+      ctx.font = `600 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specs.join("  ·  "), cell.x + capPadX, cell.y + cell.h - capPadX);
+    }
+
+    // Price badge (small red) top-right corner of each cell
+    if (listing.listPrice) {
+      const priceStr = `$${Number(listing.listPrice).toLocaleString()}`;
+      ctx.font = `900 ${priceFont}px 'Helvetica Neue', Arial, sans-serif`;
+      const pW = ctx.measureText(priceStr).width;
+      const pPadX = Math.round(priceFont * 0.6);
+      const pPadY = Math.round(priceFont * 0.35);
+      const bW = pW + pPadX * 2;
+      const bH = priceFont + pPadY * 2;
+      ctx.fillStyle = RED;
+      ctx.fillRect(cell.x + cell.w - bW, cell.y, bW, bH);
+      ctx.fillStyle = WHITE;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(priceStr, cell.x + cell.w - bW / 2, cell.y + bH / 2);
+    }
+  }
+}
+
 function BrandedOverlayGraphic({ overlay }) {
   const canvasRef = useRef(null);
   const [dataUrl, setDataUrl] = useState("");
@@ -8950,16 +9144,6 @@ function BrandedOverlayGraphic({ overlay }) {
       setRendering(true);
       setError("");
       try {
-        // Load the source photo
-        const img = new Image();
-        img.crossOrigin = "anonymous";
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = () => reject(new Error("Could not load photo"));
-          img.src = overlay.sourceUrl;
-        });
-        if (cancelled) return;
-
         // Load the RE/MAX logo (embedded base64 — always available)
         const logoImg = new Image();
         try {
@@ -8979,34 +9163,60 @@ function BrandedOverlayGraphic({ overlay }) {
         const WHITE = "#FFFFFF";
         const colors = { NAVY, NAVY_DARK, RED, CREAM, WHITE };
 
-        // Normalize listing data
-        const listing = overlay.listing || {};
-        const addrLine = [listing.address, listing.city, listing.state].filter(Boolean).join(", ");
-        const specParts = [];
-        if (listing.beds) specParts.push(`${listing.beds} BD`);
-        if (listing.baths) specParts.push(`${listing.baths} BA`);
-        if (listing.sqft) specParts.push(`${Number(listing.sqft).toLocaleString()} SQFT`);
-        const specLine = specParts.join("  •  ");
-
-        const payload = {
-          img, logoImg, colors,
-          label: overlay.label || "",
-          subtitle: overlay.subtitle || "",
-          addrLine, specLine,
-          hasInfo: !!(addrLine || specLine),
-        };
-
-        // ─── PICK A RANDOM STYLE each time this renders ───
-        // 3 distinct looks so Jesse's social feed stays visually fresh.
-        const styles = ["CLEAN", "SIDE_PANEL", "MAGAZINE"];
-        const styleIdx = Math.floor(Math.random() * styles.length);
-        const styleName = styles[styleIdx];
-
         const canvas = canvasRef.current || document.createElement("canvas");
+        let styleName = "";
 
-        if (styleName === "CLEAN") renderCleanStyle(canvas, payload);
-        else if (styleName === "SIDE_PANEL") renderSidePanelStyle(canvas, payload);
-        else renderMagazineStyle(canvas, payload);
+        // ─── MULTI-LISTING COLLAGE PATH ───
+        if (overlay.isMulti && Array.isArray(overlay.listings) && overlay.listings.length > 1) {
+          // Load all photos in parallel
+          const imgs = await Promise.all(overlay.listings.map(l => new Promise((resolve, reject) => {
+            const im = new Image();
+            im.crossOrigin = "anonymous";
+            im.onload = () => resolve(im);
+            im.onerror = () => reject(new Error(`Could not load photo for ${l.address}`));
+            im.src = l.sourceUrl;
+          })));
+          if (cancelled) return;
+
+          renderCollageStyle(canvas, {
+            imgs, listings: overlay.listings, logoImg, colors,
+            label: overlay.label || "",
+          });
+          styleName = "COLLAGE";
+        } else {
+          // ─── SINGLE-LISTING PATH ───
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = () => reject(new Error("Could not load photo"));
+            img.src = overlay.sourceUrl;
+          });
+          if (cancelled) return;
+
+          const listing = overlay.listing || {};
+          const addrLine = [listing.address, listing.city, listing.state].filter(Boolean).join(", ");
+          const specParts = [];
+          if (listing.beds) specParts.push(`${listing.beds} BD`);
+          if (listing.baths) specParts.push(`${listing.baths} BA`);
+          if (listing.sqft) specParts.push(`${Number(listing.sqft).toLocaleString()} SQFT`);
+          const specLine = specParts.join("  •  ");
+
+          const payload = {
+            img, logoImg, colors,
+            label: overlay.label || "",
+            subtitle: overlay.subtitle || "",
+            addrLine, specLine,
+            hasInfo: !!(addrLine || specLine),
+          };
+
+          const styles = ["CLEAN", "SIDE_PANEL", "MAGAZINE"];
+          styleName = styles[Math.floor(Math.random() * styles.length)];
+
+          if (styleName === "CLEAN") renderCleanStyle(canvas, payload);
+          else if (styleName === "SIDE_PANEL") renderSidePanelStyle(canvas, payload);
+          else renderMagazineStyle(canvas, payload);
+        }
 
         const out = canvas.toDataURL("image/jpeg", 0.92);
         if (!cancelled) {
@@ -9037,7 +9247,10 @@ function BrandedOverlayGraphic({ overlay }) {
     CLEAN: "Clean Classic",
     SIDE_PANEL: "Bold Side Panel",
     MAGAZINE: "Magazine Feature",
+    COLLAGE: "Multi-Listing Collage",
   };
+  // "Try another style" doesn't apply to collages (they only have one layout)
+  const canReroll = styleUsed !== "COLLAGE";
 
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
@@ -9063,16 +9276,18 @@ function BrandedOverlayGraphic({ overlay }) {
               Download graphic
             </a>
           </div>
-          <button
-            onClick={() => setRenderNonce(n => n + 1)}
-            style={{
-              display: "block", marginTop: 6, padding: "6px 12px",
-              background: "transparent", border: `1px solid ${C.line}`,
-              borderRadius: 6, color: "var(--ink)", fontSize: 12,
-              cursor: "pointer", width: "100%", textAlign: "center",
-            }}>
-            ↻ Try another style
-          </button>
+          {canReroll && (
+            <button
+              onClick={() => setRenderNonce(n => n + 1)}
+              style={{
+                display: "block", marginTop: 6, padding: "6px 12px",
+                background: "transparent", border: `1px solid ${C.line}`,
+                borderRadius: 6, color: "var(--ink)", fontSize: 12,
+                cursor: "pointer", width: "100%", textAlign: "center",
+              }}>
+              ↻ Try another style
+            </button>
+          )}
         </div>
       )}
       <canvas ref={canvasRef} style={{ display: "none" }} />

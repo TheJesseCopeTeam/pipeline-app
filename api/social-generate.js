@@ -426,7 +426,10 @@ async function fetchNwmlsAttachments(mentionedListings) {
 
 // Phase C: Fetch signed URLs for photos of mentioned listings. Cover photo
 // first, then the rest in saved order. Capped to avoid token explosion.
-const PHOTOS_PER_LISTING = 6;
+const PHOTOS_PER_LISTING = 10;
+// Only this many photos are attached to Claude's context for writing the post —
+// Jesse can still pick from the full set in the frontend tour picker.
+const PHOTOS_IN_CLAUDE_CONTEXT = 6;
 async function fetchPhotoAttachments(mentionedListings) {
   if (!mentionedListings || mentionedListings.length === 0) return [];
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -440,7 +443,9 @@ async function fetchPhotoAttachments(mentionedListings) {
   for (const l of mentionedListings) {
     const ownerId = ownerIds[l.id];
     if (!ownerId) continue;
-    const photoIds = Array.isArray(l.photoDocIds) ? l.photoDocIds.slice() : [];
+    // Dedupe photoDocIds — a photo uploaded twice with the same doc id would
+    // otherwise appear in the tour twice.
+    const photoIds = Array.isArray(l.photoDocIds) ? [...new Set(l.photoDocIds)] : [];
     if (photoIds.length === 0) continue;
     // Cover photo first if we have one
     let ordered = photoIds;
@@ -560,8 +565,8 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       for (const a of nwmlsAtt) {
         content.push({ type: "document", source: { type: "url", url: a.url } });
       }
-      // Then listing photos
-      for (const p of photoAtt) {
+      // Then listing photos (capped so we don't blow up Claude's context)
+      for (const p of photoAtt.slice(0, PHOTOS_IN_CLAUDE_CONTEXT)) {
         content.push({ type: "image", source: { type: "url", url: p.url } });
       }
       // Then Jesse's uploaded photo
@@ -634,8 +639,10 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       isUploaded: true,
     };
   } else if (photoTourIntent && mentioned.length === 1 && photoAtt.length >= 2) {
-    // Phase H: Single-listing photo tour. Use up to 6 photos (cover first).
-    const tourPhotos = photoAtt.slice(0, 6).map(p => ({ url: p.url, isCover: p.isCover }));
+    // Phase H: Single-listing photo tour. Send ALL available photos so Jesse
+    // can pick which ones to include in the picker UI; the frontend takes the
+    // first 2-6 selected and renders those.
+    const tourPhotos = photoAtt.map(p => ({ url: p.url, isCover: p.isCover }));
     const m = mentioned[0];
     let badgePrice = overlayInfo && overlayInfo.args.subtitle ? overlayInfo.args.subtitle : "";
     if (!badgePrice && m.listPrice) {

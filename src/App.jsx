@@ -9247,6 +9247,163 @@ function renderFilmStripStyle(canvas, payload) {
   }
 }
 
+// STYLE — "Photo Tour": one listing shown with multiple photos in a grid.
+// 1200x1200 square. Header: red JUST LISTED (or whatever) badge + big
+// serif address centered. Middle: a 2x2, 2x3, or 3x2 grid of photos
+// depending on count. Footer: navy with logo + specs + team contact.
+function renderPhotoTourStyle(canvas, payload) {
+  const { imgs, logoImg, colors, label, subtitle, addrLine, specLine } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const n = Math.min(imgs.length, 6);
+  const SIZE = 1200;
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext("2d");
+
+  // Cream background
+  ctx.fillStyle = CREAM;
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  // ─── Header (top band) ───
+  const headerH = 180;
+  ctx.fillStyle = WHITE;
+  ctx.fillRect(0, 0, SIZE, headerH);
+
+  // Red badge on left with label (and optional subtitle/price)
+  if (label) {
+    const bFont = 36;
+    const sFont = 24;
+    ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+    const lW = ctx.measureText(label).width;
+    let sW = 0;
+    if (subtitle) { ctx.font = `700 ${sFont}px 'Helvetica Neue', Arial, sans-serif`; sW = ctx.measureText(subtitle).width; }
+    const bPadX = 24;
+    const bPadY = 14;
+    const bW = Math.max(lW, sW) + bPadX * 2;
+    const bH = bFont + (subtitle ? sFont + 10 : 0) + bPadY * 2;
+    const bX = 40;
+    const bY = (headerH - bH) / 2;
+    ctx.fillStyle = RED;
+    ctx.fillRect(bX, bY, bW, bH);
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `900 ${bFont}px 'Helvetica Neue', Arial, sans-serif`;
+    const lY = subtitle ? bY + bPadY + bFont * 0.55 : bY + bH / 2;
+    ctx.fillText(label, bX + bW / 2, lY);
+    if (subtitle) {
+      ctx.font = `700 ${sFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(subtitle, bX + bW / 2, lY + bFont * 0.75);
+    }
+  }
+
+  // Address centered on the right side
+  if (addrLine) {
+    ctx.fillStyle = NAVY;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    // Fit text — shrink if too wide
+    let addrFont = 44;
+    ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+    const rightEdge = SIZE - 40;
+    const maxAddrW = SIZE * 0.55;
+    while (ctx.measureText(addrLine).width > maxAddrW && addrFont > 24) {
+      addrFont -= 2;
+      ctx.font = `800 ${addrFont}px Georgia, 'Times New Roman', serif`;
+    }
+    ctx.fillText(addrLine, rightEdge, headerH / 2 - (specLine ? 14 : 0));
+    if (specLine) {
+      ctx.fillStyle = "#4A453D";
+      ctx.font = `600 22px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specLine, rightEdge, headerH / 2 + 22);
+    }
+  }
+
+  // Thin red stripe below header
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, headerH, SIZE, 6);
+
+  // ─── Photo grid ───
+  const gridTop = headerH + 6;
+  const footerH = 150;
+  const gridH = SIZE - gridTop - footerH;
+  const gap = 8;
+
+  // Pick layout by count. All layouts aim to use all `n` photos nicely.
+  let cells = [];
+  if (n === 2) {
+    const w = (SIZE - gap) / 2;
+    cells = [
+      { x: 0, y: gridTop, w, h: gridH },
+      { x: w + gap, y: gridTop, w, h: gridH },
+    ];
+  } else if (n === 3) {
+    // 1 big on left, 2 stacked on right
+    const bigW = (SIZE - gap) * 0.6;
+    const smallW = SIZE - bigW - gap;
+    const smallH = (gridH - gap) / 2;
+    cells = [
+      { x: 0, y: gridTop, w: bigW, h: gridH },
+      { x: bigW + gap, y: gridTop, w: smallW, h: smallH },
+      { x: bigW + gap, y: gridTop + smallH + gap, w: smallW, h: smallH },
+    ];
+  } else if (n === 4) {
+    const w = (SIZE - gap) / 2;
+    const h = (gridH - gap) / 2;
+    cells = [
+      { x: 0, y: gridTop, w, h },
+      { x: w + gap, y: gridTop, w, h },
+      { x: 0, y: gridTop + h + gap, w, h },
+      { x: w + gap, y: gridTop + h + gap, w, h },
+    ];
+  } else {
+    // 5 or 6: 3 columns, 2 rows
+    const cols = 3;
+    const rows = n === 5 ? 2 : 2;
+    const w = (SIZE - gap * (cols - 1)) / cols;
+    const h = (gridH - gap * (rows - 1)) / rows;
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      cells.push({ x: col * (w + gap), y: gridTop + row * (h + gap), w, h });
+    }
+  }
+
+  // Draw photos cover-cropped into each cell
+  for (let i = 0; i < Math.min(n, cells.length); i++) {
+    const img = imgs[i];
+    const cell = cells[i];
+    const srcRatio = img.naturalWidth / img.naturalHeight;
+    const cellRatio = cell.w / cell.h;
+    let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+    if (srcRatio > cellRatio) {
+      // Source wider → crop sides
+      sw = img.naturalHeight * cellRatio;
+      sx = (img.naturalWidth - sw) / 2;
+    } else {
+      // Source taller → crop top/bottom
+      sh = img.naturalWidth / cellRatio;
+      sy = (img.naturalHeight - sh) / 2;
+    }
+    ctx.drawImage(img, sx, sy, sw, sh, cell.x, cell.y, cell.w, cell.h);
+  }
+
+  // ─── Navy footer ───
+  const footerY = SIZE - footerH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, SIZE, footerH);
+  const fpadX = 40;
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(footerH * 0.5);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+  }
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.font = `800 32px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", SIZE - fpadX, footerY + footerH * 0.37);
+  ctx.font = `500 24px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("PREMIER GROUP  •  360-431-5915  •  JESSECOPE@REMAX.NET", SIZE - fpadX, footerY + footerH * 0.72);
+}
+
 // STYLE 4 — "Multi-Listing Collage": multiple properties in one graphic.
 // Layout depends on count:
 //   2 listings → side-by-side (2 columns)
@@ -9480,6 +9637,33 @@ function BrandedOverlayGraphic({ overlay }) {
         const canvas = canvasRef.current || document.createElement("canvas");
         let styleName = "";
 
+        // ─── PHOTO TOUR PATH (single listing, multiple photos) ───
+        if (overlay.isTour && Array.isArray(overlay.tourPhotos) && overlay.tourPhotos.length >= 2) {
+          const imgs = await Promise.all(overlay.tourPhotos.map(p => new Promise((resolve, reject) => {
+            const im = new Image();
+            im.crossOrigin = "anonymous";
+            im.onload = () => resolve(im);
+            im.onerror = () => reject(new Error(`Could not load photo`));
+            im.src = p.url;
+          })));
+          if (cancelled) return;
+
+          const listing = overlay.listing || {};
+          const addrLine = [listing.address, listing.city, listing.state].filter(Boolean).join(", ");
+          const specParts = [];
+          if (listing.beds) specParts.push(`${listing.beds} BD`);
+          if (listing.baths) specParts.push(`${listing.baths} BA`);
+          if (listing.sqft) specParts.push(`${Number(listing.sqft).toLocaleString()} SQFT`);
+          const specLine = specParts.join("  •  ");
+
+          renderPhotoTourStyle(canvas, {
+            imgs, logoImg, colors,
+            label: overlay.label || "",
+            subtitle: overlay.subtitle || "",
+            addrLine, specLine,
+          });
+          styleName = "PHOTO_TOUR";
+        } else
         // ─── MULTI-LISTING COLLAGE PATH ───
         if (overlay.isMulti && Array.isArray(overlay.listings) && overlay.listings.length > 1) {
           // Load all photos in parallel
@@ -9600,11 +9784,12 @@ function BrandedOverlayGraphic({ overlay }) {
     MINIMAL: "Minimal Luxury",
     FILM_STRIP: "Film Strip",
     COLLAGE: "Multi-Listing Collage",
+    PHOTO_TOUR: "Photo Tour",
     UPLOADED_PLAIN: "Branded Photo",
   };
-  // "Try another style" doesn't apply to collages or label-free uploads
-  // (each has only one layout to choose from).
-  const canReroll = styleUsed !== "COLLAGE" && styleUsed !== "UPLOADED_PLAIN";
+  // "Try another style" doesn't apply to collages, photo tours, or
+  // label-free uploads (each has only one layout to choose from).
+  const canReroll = styleUsed !== "COLLAGE" && styleUsed !== "PHOTO_TOUR" && styleUsed !== "UPLOADED_PLAIN";
 
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
@@ -10005,6 +10190,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
               <div>"sold"</div>
               <div style={{ fontWeight: 600 }}>JUST SOLD:</div>
               <div>"just sold"</div>
+              <div style={{ fontWeight: 600 }}>PHOTO TOUR:</div>
+              <div>"photo tour" / "photo gallery" / "interior photos" / "more photos" (combine with a listing address — shows up to 6 photos of that home in one branded grid)</div>
             </div>
           </div>
         )}

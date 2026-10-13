@@ -463,7 +463,16 @@ async function fetchPhotoAttachments(mentionedListings) {
   return results;
 }
 
-async function doChat({ messages, activeListings }) {
+// Parse a data URL (e.g. "data:image/jpeg;base64,/9j/...") into
+// { mediaType, data } for passing to the Anthropic API.
+function parseDataUrl(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== "string") return null;
+  const m = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!m) return null;
+  return { mediaType: m[1], data: m[2] };
+}
+
+async function doChat({ messages, activeListings, uploadedPhoto }) {
   // Build a rich listing summary — include ALL the fields Pipeline knows about
   // so Claude has them even when the NWMLS printout isn't attached.
   const listingLines = (activeListings && activeListings.length > 0)
@@ -480,11 +489,17 @@ async function doChat({ messages, activeListings }) {
       }).join("\n")
     : "(none in the app yet)";
 
+  const parsedUpload = parseDataUrl(uploadedPhoto);
+
   // Keep the system prompt SHORT and purely directive.
+  const uploadNote = parsedUpload
+    ? `\n\nJesse has ATTACHED HIS OWN PHOTO to this message. This is NOT a listing-based post. Write a post that fits whatever he's showing in the photo + whatever his message asks for (team event, celebration, hiring, community, closing announcement, etc.). Do not invent listing details and do not add bracketed [price] placeholders unless he's clearly asking for a price-focused post.`
+    : "";
+
   const system = `You write Facebook and Instagram posts for Jesse Cope, a real estate broker at RE/MAX Premier Group in Longview, WA.
 
 Jesse's active listings:
-${listingLines}
+${listingLines}${uploadNote}
 
 YOUR JOB: Write the post. Every message. No exceptions.
 
@@ -497,11 +512,6 @@ HOW TO RESPOND:
 - Length: 120-250 words.
 - Team contacts when it fits: Jesse 360-431-5915 / Mercedes 360-355-0646.
 
-IF JESSE MENTIONS A PHOTO, IMAGE, PRICE BANNER, OR OVERLAY:
-- Still write the full post as described above.
-- At the very end (after hashtags), add ONE short italic line like: _(For the price-banner photo, pair this with a Canva graphic — in-app image overlays coming in a future update.)_
-- Do NOT skip writing the post. Do NOT recommend external tools in the middle of your response.
-
 For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrite the previous post with those tweaks.`;
 
   const trimmed = (messages || []).slice(-20).map(m => ({
@@ -511,16 +521,17 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
 
   // Phase B+C: Find listings mentioned in the latest user message and attach
   // their NWMLS printout PDFs AND photos so Claude has the real details and
-  // visual context to work with.
+  // visual context to work with. When Jesse uploaded his own photo, we skip
+  // the listing lookup entirely and treat this as a general post.
   const lastUserMsg = [...trimmed].reverse().find(m => m.role === "user");
   const lastText = lastUserMsg?.content || "";
-  const mentioned = findMentionedListings(lastText, activeListings);
-  const nwmlsAtt = await fetchNwmlsAttachments(mentioned);
-  const photoAtt = await fetchPhotoAttachments(mentioned);
+  const mentioned = parsedUpload ? [] : findMentionedListings(lastText, activeListings);
+  const nwmlsAtt = parsedUpload ? [] : await fetchNwmlsAttachments(mentioned);
+  const photoAtt = parsedUpload ? [] : await fetchPhotoAttachments(mentioned);
 
-  // If we have attachments, convert the LAST user message into a multimodal
-  // message with the PDFs and photos attached.
-  if ((nwmlsAtt.length > 0 || photoAtt.length > 0) && trimmed.length > 0) {
+  // If we have attachments OR an uploaded photo, convert the LAST user message
+  // into a multimodal message with everything attached.
+  if ((nwmlsAtt.length > 0 || photoAtt.length > 0 || parsedUpload) && trimmed.length > 0) {
     const lastIdx = trimmed.length - 1;
     const lastMsg = trimmed[lastIdx];
     if (lastMsg.role === "user" && typeof lastMsg.content === "string") {
@@ -531,20 +542,34 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       if (photoAtt.length > 0) {
         noteLines.push(`Attached: ${photoAtt.length} photo${photoAtt.length === 1 ? "" : "s"} from the listing${photoAtt.length === 1 ? "" : "s"} (cover photo first).`);
       }
+      if (parsedUpload) {
+        noteLines.push(`Attached: 1 photo Jesse uploaded for this post. Write a post that fits what's actually in the photo + what Jesse's message asks for. This is NOT a listing-based post unless Jesse's message says otherwise.`);
+      }
+
+      const guidanceLine = parsedUpload
+        ? "(Describe or reference what you can see in the uploaded photo. Do not invent listing details.)"
+        : "(Pull real details from the attached NWMLS printout(s). The photos are for your visual reference — mention things you can actually see in them. Do not invent anything.)";
 
       const content = [
         {
           type: "text",
-          text: `${lastMsg.content}\n\n${noteLines.join("\n")}\n(Pull real details from the attached NWMLS printout(s). The photos are for your visual reference — mention things you can actually see in them. Do not invent anything.)`,
+          text: `${lastMsg.content}\n\n${noteLines.join("\n")}\n${guidanceLine}`,
         },
       ];
       // Attach PDFs first
       for (const a of nwmlsAtt) {
         content.push({ type: "document", source: { type: "url", url: a.url } });
       }
-      // Then photos
+      // Then listing photos
       for (const p of photoAtt) {
         content.push({ type: "image", source: { type: "url", url: p.url } });
+      }
+      // Then Jesse's uploaded photo
+      if (parsedUpload) {
+        content.push({
+          type: "image",
+          source: { type: "base64", media_type: parsedUpload.mediaType, data: parsedUpload.data },
+        });
       }
       trimmed[lastIdx] = { role: "user", content };
     }
@@ -580,14 +605,28 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     isCover: p.isCover,
   }));
 
-  // Phase D1+D2+D3: Detect overlay template and attach rendering instructions.
+  // Phase D1+D2+D3+F: Detect overlay template and attach rendering instructions.
   // The frontend composes the branded image using HTML Canvas.
+  // - Uploaded photo: send the data URL + optional label from trigger words
   // - Single mentioned listing: send one listing + random style
   // - Multiple mentioned listings: send all listings + collage style
   let overlay = null;
   const firstMentioned = mentioned[0] || null;
   const overlayInfo = detectOverlayTemplate(lastText, firstMentioned);
-  if (overlayInfo && photoAtt.length > 0) {
+
+  // Phase F: Uploaded-photo path takes priority when Jesse attached his own photo
+  if (parsedUpload) {
+    overlay = {
+      template: overlayInfo ? overlayInfo.template : null,
+      label: overlayInfo ? templateLabel(overlayInfo.template) : "",
+      subtitle: overlayInfo && overlayInfo.args.subtitle ? overlayInfo.args.subtitle : "",
+      sourceUrl: uploadedPhoto,          // data URL — browser can render it directly
+      listing: null,
+      listings: null,
+      isMulti: false,
+      isUploaded: true,
+    };
+  } else if (overlayInfo && photoAtt.length > 0) {
     // Group photos by their listingId so we can find each listing's cover
     const photosByListing = {};
     for (const p of photoAtt) {
@@ -684,5 +723,5 @@ export default async function handler(req, res) {
 }
 
 export const config = {
-  api: { bodyParser: { sizeLimit: "8mb" } },
+  api: { bodyParser: { sizeLimit: "16mb" } },
 };

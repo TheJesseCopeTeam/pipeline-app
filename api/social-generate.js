@@ -589,12 +589,28 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   if (overlayInfo && photoAtt.length > 0) {
     const coverPhoto = photoAtt.find(p => p.isCover) || photoAtt[0];
     if (coverPhoto) {
+      // Compute price for the badge: use subtitle if provided (e.g. for
+      // PRICE_DROP), otherwise use the listing's list price.
+      let badgePrice = overlayInfo.args.subtitle || "";
+      if (!badgePrice && firstMentioned && firstMentioned.listPrice) {
+        badgePrice = `$${Number(firstMentioned.listPrice).toLocaleString()}`;
+      }
+
       overlay = {
         sourceUrl: coverPhoto.url,
-        address: coverPhoto.address,
         template: overlayInfo.template,
         label: templateLabel(overlayInfo.template),
-        subtitle: overlayInfo.args.subtitle || "",
+        subtitle: badgePrice,
+        // Listing details for the info section
+        listing: firstMentioned ? {
+          address: firstMentioned.address || "",
+          city: firstMentioned.city || "",
+          state: firstMentioned.state || "",
+          beds: firstMentioned.beds || null,
+          baths: firstMentioned.baths || null,
+          sqft: firstMentioned.sqft || null,
+          listPrice: firstMentioned.listPrice || null,
+        } : null,
       };
     }
   }

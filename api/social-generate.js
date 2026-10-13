@@ -580,37 +580,58 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     isCover: p.isCover,
   }));
 
-  // Phase D1+D2: Detect overlay template from message and attach rendering
-  // instructions. The frontend composes the branded image using HTML Canvas
-  // (which has fonts available, unlike Vercel's serverless runtime).
+  // Phase D1+D2+D3: Detect overlay template and attach rendering instructions.
+  // The frontend composes the branded image using HTML Canvas.
+  // - Single mentioned listing: send one listing + random style
+  // - Multiple mentioned listings: send all listings + collage style
   let overlay = null;
   const firstMentioned = mentioned[0] || null;
   const overlayInfo = detectOverlayTemplate(lastText, firstMentioned);
   if (overlayInfo && photoAtt.length > 0) {
-    const coverPhoto = photoAtt.find(p => p.isCover) || photoAtt[0];
-    if (coverPhoto) {
-      // Compute price for the badge: use subtitle if provided (e.g. for
-      // PRICE_DROP), otherwise use the listing's list price.
+    // Group photos by their listingId so we can find each listing's cover
+    const photosByListing = {};
+    for (const p of photoAtt) {
+      if (!photosByListing[p.listingId]) photosByListing[p.listingId] = [];
+      photosByListing[p.listingId].push(p);
+    }
+
+    // Build the per-listing array (preserve the order mentioned appeared in)
+    const listingsForOverlay = [];
+    for (const m of mentioned) {
+      const photos = photosByListing[m.id] || [];
+      if (photos.length === 0) continue;
+      const coverPhoto = photos.find(p => p.isCover) || photos[0];
+      listingsForOverlay.push({
+        sourceUrl: coverPhoto.url,
+        address: m.address || "",
+        city: m.city || "",
+        state: m.state || "",
+        beds: m.beds || null,
+        baths: m.baths || null,
+        sqft: m.sqft || null,
+        listPrice: m.listPrice || null,
+      });
+    }
+
+    if (listingsForOverlay.length > 0) {
+      // Compute price for the badge (single-listing case only)
       let badgePrice = overlayInfo.args.subtitle || "";
       if (!badgePrice && firstMentioned && firstMentioned.listPrice) {
         badgePrice = `$${Number(firstMentioned.listPrice).toLocaleString()}`;
       }
 
+      const isMulti = listingsForOverlay.length > 1;
+
       overlay = {
-        sourceUrl: coverPhoto.url,
         template: overlayInfo.template,
         label: templateLabel(overlayInfo.template),
-        subtitle: badgePrice,
-        // Listing details for the info section
-        listing: firstMentioned ? {
-          address: firstMentioned.address || "",
-          city: firstMentioned.city || "",
-          state: firstMentioned.state || "",
-          beds: firstMentioned.beds || null,
-          baths: firstMentioned.baths || null,
-          sqft: firstMentioned.sqft || null,
-          listPrice: firstMentioned.listPrice || null,
-        } : null,
+        subtitle: isMulti ? "" : badgePrice,
+        // Backward-compat for single-listing styles that read `sourceUrl` and `listing`
+        sourceUrl: listingsForOverlay[0].sourceUrl,
+        listing: listingsForOverlay[0],
+        // New: full array of listings for the collage renderer
+        listings: listingsForOverlay,
+        isMulti,
       };
     }
   }

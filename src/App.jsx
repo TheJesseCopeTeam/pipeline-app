@@ -3462,12 +3462,11 @@ function TransactionCard({ txn, onClick, onUpdate }) {
     ? `${txn.sellerName || "—"} → ${txn.buyerName || "—"}`
     : "No parties yet";
 
-  // Inline edit state. editMode is null | "parties" | "price" | "expires".
-  const [editMode, setEditMode] = useState(null);
+  // Inline edit state — Parties only (Price and Expires can be edited from the
+  // full transaction edit modal; inline pencils for those made the card busy).
+  const [editMode, setEditMode] = useState(null); // null | "parties"
   const [draftSeller, setDraftSeller] = useState("");
   const [draftBuyer, setDraftBuyer] = useState("");
-  const [draftPrice, setDraftPrice] = useState("");
-  const [draftExpires, setDraftExpires] = useState("");
   const [saving, setSaving] = useState(false);
 
   const expMs = (txn.milestones || []).find(m => m.id === "expirationDate");
@@ -3475,11 +3474,16 @@ function TransactionCard({ txn, onClick, onUpdate }) {
 
   const stop = (e) => e.stopPropagation();
 
+  // Which price field we're showing / editing: for an active listing (no
+  // mutual acceptance yet) that's the asking price (listPrice); after the
+  // deal goes pending, or for buyer transactions, it's the purchase price.
+  const showAsking = txn.type === "listing" && !txn.contractDate;
+  const priceLabel = showAsking ? "Asking" : "Price";
+  const priceValue = showAsking ? txn.listPrice : txn.price;
+
   function startEdit(mode, e) {
     e.stopPropagation();
     if (mode === "parties") { setDraftSeller(txn.sellerName || ""); setDraftBuyer(txn.buyerName || ""); }
-    else if (mode === "price") { setDraftPrice(txn.price || ""); }
-    else if (mode === "expires") { setDraftExpires(expMs?.date || ""); }
     setEditMode(mode);
   }
   function cancel(e) { e.stopPropagation(); setEditMode(null); }
@@ -3489,27 +3493,6 @@ function TransactionCard({ txn, onClick, onUpdate }) {
     setSaving(true);
     try {
       await onUpdate({ ...txn, sellerName: draftSeller.trim(), buyerName: draftBuyer.trim() });
-      setEditMode(null);
-    } catch (err) { alert("Save failed: " + (err.message || err)); }
-    finally { setSaving(false); }
-  }
-  async function savePrice(e) {
-    e.stopPropagation();
-    setSaving(true);
-    try {
-      await onUpdate({ ...txn, price: draftPrice });
-      setEditMode(null);
-    } catch (err) { alert("Save failed: " + (err.message || err)); }
-    finally { setSaving(false); }
-  }
-  async function saveExpires(e) {
-    e.stopPropagation();
-    setSaving(true);
-    try {
-      const nextMs = (txn.milestones || []).map(m =>
-        m.id === "expirationDate" ? { ...m, date: draftExpires } : m
-      );
-      await onUpdate({ ...txn, milestones: nextMs });
       setEditMode(null);
     } catch (err) { alert("Save failed: " + (err.message || err)); }
     finally { setSaving(false); }
@@ -3584,27 +3567,9 @@ function TransactionCard({ txn, onClick, onUpdate }) {
         )}
       </div>
 
-      {/* Price */}
-      <div style={{ padding: "6px 0", borderTop: "1px solid var(--ink-line)", fontSize: 13 }}>
-        {editMode === "price" ? (
-          <div onClick={stop}>
-            <div style={{ color: "var(--ink-soft)", marginBottom: 4 }}>Price</div>
-            <input type="number" value={draftPrice} onChange={(e) => setDraftPrice(e.target.value)} onClick={stop}
-                   placeholder="640000"
-                   style={{ ...styles.input, padding: "6px 8px", fontSize: 13, width: "100%" }} />
-            <div style={editActions}>
-              <button onClick={cancel} style={smallBtn} disabled={saving}>Cancel</button>
-              <button onClick={savePrice} style={primaryBtn} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ color: "var(--ink-soft)", display: "flex", alignItems: "center" }}>
-              Price {pencilBtn("price")}
-            </span>
-            <span style={{ fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(txn.price)}</span>
-          </div>
-        )}
+      <div style={styles.cardRow}>
+        <span style={{ color: "var(--ink-soft)" }}>{priceLabel}</span>
+        <span style={{ fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(priceValue)}</span>
       </div>
 
       {txn.closingDate && (
@@ -3614,27 +3579,11 @@ function TransactionCard({ txn, onClick, onUpdate }) {
         </div>
       )}
 
-      {/* Expires — listings only. Show the row whenever we're editing it OR a date is set. */}
-      {txn.type === "listing" && expMs && (editMode === "expires" || expMs.date) && (
-        <div style={{ padding: "6px 0", borderTop: "1px solid var(--ink-line)", fontSize: 13 }}>
-          {editMode === "expires" ? (
-            <div onClick={stop}>
-              <div style={{ color: "var(--ink-soft)", marginBottom: 4 }}>Expires</div>
-              <input type="date" value={draftExpires} onChange={(e) => setDraftExpires(e.target.value)} onClick={stop}
-                     style={{ ...styles.input, padding: "6px 8px", fontSize: 13, width: "100%" }} />
-              <div style={editActions}>
-                <button onClick={cancel} style={smallBtn} disabled={saving}>Cancel</button>
-                <button onClick={saveExpires} style={primaryBtn} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ color: "var(--ink-soft)", display: "flex", alignItems: "center" }}>
-                Expires {pencilBtn("expires")}
-              </span>
-              <span style={{ fontWeight: 500 }}>{fmtDateShort(expMs.date)}</span>
-            </div>
-          )}
+      {/* Expires — listings only, display-only */}
+      {txn.type === "listing" && expMs && expMs.date && (
+        <div style={styles.cardRow}>
+          <span style={{ color: "var(--ink-soft)" }}>Expires</span>
+          <span style={{ fontWeight: 500 }}>{fmtDateShort(expMs.date)}</span>
         </div>
       )}
 
@@ -8081,8 +8030,16 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
         <div style={styles.modalBody}>
           {/* Financial snapshot */}
           <div style={styles.factGrid}>
-            {txn.listPrice && txn.type === "listing" && <Fact icon={DollarSign} label="List Price" value={fmtMoney(txn.listPrice)} />}
-            <Fact icon={DollarSign} label={txn.type === "listing" && !txn.contractDate ? "Asking" : "Price"} value={fmtMoney(txn.price)} />
+            {/* For a listing with no mutual acceptance yet, show the asking price
+                from listPrice. Once the deal goes pending, show list + sold side-by-side. */}
+            {txn.type === "listing" && !txn.contractDate ? (
+              <Fact icon={DollarSign} label="Asking" value={fmtMoney(txn.listPrice)} />
+            ) : (
+              <>
+                {txn.listPrice && txn.type === "listing" && <Fact icon={DollarSign} label="List Price" value={fmtMoney(txn.listPrice)} />}
+                <Fact icon={DollarSign} label="Price" value={fmtMoney(txn.price)} />
+              </>
+            )}
             {txn.earnestMoney && <Fact icon={PiggyBank} label="Earnest Money" value={fmtMoney(txn.earnestMoney)} />}
             {txn.downPayment && <Fact icon={DollarSign} label="Down Payment" value={fmtMoney(txn.downPayment)} />}
             {txn.closingCosts && <Fact icon={DollarSign} label="Closing Costs" value={fmtMoney(txn.closingCosts)} />}

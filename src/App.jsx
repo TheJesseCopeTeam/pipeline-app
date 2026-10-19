@@ -695,7 +695,9 @@ function newTransaction(type) {
     status: "active",
     address: "", city: "", state: "", zip: "",
     sellerName: "", sellerEmail: "", sellerPhone: "",
+    sellerRepRole: "", sellerRepName: "",
     buyerName: "",  buyerEmail: "",  buyerPhone: "",
+    buyerRepRole: "",  buyerRepName: "",
     listPrice: "", price: "", earnestMoney: "", downPayment: "", closingCosts: "",
     commission: "", listingCommission: "", buyingCommission: "",
     financing: "",
@@ -7387,6 +7389,13 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
             </Field>
             <Field label="Email"><input type="email" value={form.sellerEmail} onChange={(e) => update("sellerEmail", e.target.value)} style={styles.input} /></Field>
             <Field label="Phone"><input type="tel" value={form.sellerPhone} onChange={(e) => update("sellerPhone", e.target.value)} style={styles.input} /></Field>
+            <RepresentativeBlock
+              repRole={form.sellerRepRole}
+              repName={form.sellerRepName}
+              onRoleChange={(v) => update("sellerRepRole", v)}
+              onNameChange={(v) => update("sellerRepName", v)}
+              onRemove={() => { update("sellerRepRole", ""); update("sellerRepName", ""); }}
+            />
           </FormSection>
 
           <FormSection title="Buyer" icon={UserCircle2}>
@@ -7395,6 +7404,13 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
             </Field>
             <Field label="Email"><input type="email" value={form.buyerEmail} onChange={(e) => update("buyerEmail", e.target.value)} style={styles.input} /></Field>
             <Field label="Phone"><input type="tel" value={form.buyerPhone} onChange={(e) => update("buyerPhone", e.target.value)} style={styles.input} /></Field>
+            <RepresentativeBlock
+              repRole={form.buyerRepRole}
+              repName={form.buyerRepName}
+              onRoleChange={(v) => update("buyerRepRole", v)}
+              onNameChange={(v) => update("buyerRepName", v)}
+              onRemove={() => { update("buyerRepRole", ""); update("buyerRepName", ""); }}
+            />
           </FormSection>
 
           {/* Financial */}
@@ -7840,14 +7856,16 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
           </div>
 
           {/* Parties */}
-          {(txn.sellerName || txn.buyerName) && (
+          {(txn.sellerName || txn.buyerName || txn.sellerRepName || txn.buyerRepName) && (
             <div style={{ marginTop: 28 }}>
               <div style={styles.formSectionTitle}>
                 <UserCircle2 size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Parties
               </div>
               <div style={styles.partyGrid}>
-                <PartyCard label="Seller" name={txn.sellerName} email={txn.sellerEmail} phone={txn.sellerPhone} />
-                <PartyCard label="Buyer"  name={txn.buyerName}  email={txn.buyerEmail}  phone={txn.buyerPhone}  />
+                <PartyCard label="Seller" name={txn.sellerName} email={txn.sellerEmail} phone={txn.sellerPhone}
+                           repRole={txn.sellerRepRole} repName={txn.sellerRepName} />
+                <PartyCard label="Buyer"  name={txn.buyerName}  email={txn.buyerEmail}  phone={txn.buyerPhone}
+                           repRole={txn.buyerRepRole}  repName={txn.buyerRepName} />
               </div>
             </div>
           )}
@@ -8183,8 +8201,92 @@ function ShareModal({ txn, onClose }) {
   );
 }
 
-function PartyCard({ label, name, email, phone }) {
-  if (!name && !email && !phone) return null;
+// Inside the Seller/Buyer edit section — a small "+ Add representative" button
+// that reveals Role + Name fields for an estate's Personal Representative,
+// an Heir, Power of Attorney, Trustee, etc.
+const REP_ROLES = [
+  "Personal Representative",
+  "Heir",
+  "Power of Attorney",
+  "Trustee",
+  "Executor",
+  "Other",
+];
+
+function RepresentativeBlock({ repRole, repName, onRoleChange, onNameChange, onRemove }) {
+  const hasRep = !!(repRole || repName);
+  if (!hasRep) {
+    return (
+      <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
+        <button
+          type="button"
+          onClick={() => onRoleChange("Personal Representative")}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "6px 12px",
+            background: "transparent",
+            border: "1px dashed var(--ink-line)",
+            borderRadius: 6,
+            fontSize: 12, color: "var(--ink-soft)",
+            cursor: "pointer", fontFamily: "inherit",
+          }}>
+          + Add representative
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      gridColumn: "1 / -1",
+      marginTop: 4,
+      padding: "12px 14px",
+      background: "var(--paper-soft)",
+      border: "1px solid var(--ink-line)",
+      borderRadius: 8,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{
+          fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em",
+          color: "var(--accent)", fontWeight: 600,
+        }}>
+          Representative
+        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          style={{
+            background: "transparent", border: "none",
+            color: "var(--ink-soft)", fontSize: 11,
+            cursor: "pointer", padding: "2px 6px", borderRadius: 4,
+            fontFamily: "inherit",
+          }}>
+          × Remove
+        </button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Role</div>
+          <select value={repRole} onChange={(e) => onRoleChange(e.target.value)} style={styles.input}>
+            {REP_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Name</div>
+          <input
+            type="text"
+            value={repName}
+            onChange={(e) => onNameChange(e.target.value)}
+            style={styles.input}
+            placeholder="e.g. Jane Peterson"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PartyCard({ label, name, email, phone, repRole, repName }) {
+  if (!name && !email && !phone && !repName) return null;
   return (
     <div style={styles.partyCard}>
       <div style={styles.partyLabel}>{label}</div>
@@ -8193,6 +8295,22 @@ function PartyCard({ label, name, email, phone }) {
         {email && <a href={`mailto:${email}`} style={styles.partyLink}><Mail size={12} /> {email}</a>}
         {phone && <a href={`tel:${phone}`} style={styles.partyLink}><Phone size={12} /> {phone}</a>}
       </div>
+      {repName && (
+        <div style={{
+          marginTop: 8, paddingTop: 8,
+          borderTop: "1px dashed var(--ink-line)",
+          fontSize: 12, color: "var(--ink-soft)", fontStyle: "italic",
+        }}>
+          <div style={{
+            fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em",
+            color: "var(--accent)", fontWeight: 600, fontStyle: "normal",
+            marginBottom: 2,
+          }}>
+            {repRole || "Representative"}
+          </div>
+          {repName}
+        </div>
+      )}
     </div>
   );
 }
@@ -8647,6 +8765,133 @@ const REMAX_LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAlgAA
 
 // STYLE 1 — "Clean Classic": badge top-left, photo, red stripe, white info
 // section with address + specs, navy footer with logo + team contact.
+// STYLE — "Client Testimonial": elegant quote card. 1200x1200 square. Cream
+// background, red stripe at top with "CLIENT TESTIMONIAL" label, big serif
+// opening quote mark, the quote text centered in italic serif, five red
+// stars, attribution ("— The Jones Family"), optional circular client avatar
+// below, and navy footer with logo + team contact.
+function renderTestimonialStyle(canvas, payload) {
+  const { logoImg, colors, quote, attribution, avatarImg, label } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const W = 1200;
+  const H = 1200;
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  // Cream background
+  ctx.fillStyle = CREAM;
+  ctx.fillRect(0, 0, W, H);
+
+  // Red stripe at top with label
+  const stripeH = 56;
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, 0, W, stripeH);
+  ctx.fillStyle = WHITE;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `900 22px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText(label || "CLIENT TESTIMONIAL", W / 2, stripeH / 2);
+
+  // Big opening quotation mark
+  ctx.fillStyle = RED;
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  ctx.font = `900 180px Georgia, 'Times New Roman', serif`;
+  ctx.fillText("“", W / 2, stripeH + 20);
+
+  // Wrap quote text
+  const quoteMaxW = W - 160;
+  const wrapAt = (fontPx) => {
+    ctx.font = `italic 500 ${fontPx}px Georgia, 'Times New Roman', serif`;
+    const words = (quote || "").split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+      const test = line ? `${line} ${w}` : w;
+      if (ctx.measureText(test).width > quoteMaxW && line) {
+        lines.push(line); line = w;
+      } else { line = test; }
+    }
+    if (line) lines.push(line);
+    return lines;
+  };
+  let fontPx = 44;
+  let lines = wrapAt(fontPx);
+  while (lines.length > 7 && fontPx > 26) {
+    fontPx -= 2;
+    lines = wrapAt(fontPx);
+  }
+
+  // Draw the quote lines, centered
+  ctx.fillStyle = NAVY;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `italic 500 ${fontPx}px Georgia, 'Times New Roman', serif`;
+  const quoteStart = stripeH + 240;
+  const lineH = fontPx * 1.35;
+  lines.forEach((l, i) => {
+    ctx.fillText(l, W / 2, quoteStart + i * lineH);
+  });
+  const quoteEndY = quoteStart + (lines.length - 1) * lineH + lineH / 2;
+
+  // Red stars (★★★★★)
+  ctx.fillStyle = RED;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `56px Arial, 'Helvetica Neue', sans-serif`;
+  ctx.fillText("★ ★ ★ ★ ★", W / 2, quoteEndY + 60);
+
+  // Attribution
+  ctx.fillStyle = NAVY;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = `800 32px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText(`— ${(attribution || "Happy Client").toUpperCase()}`, W / 2, quoteEndY + 130);
+
+  // Avatar (optional) — circular with red ring
+  if (avatarImg && avatarImg.naturalWidth > 0) {
+    const avatarR = 70;
+    const avatarCX = W / 2;
+    const avatarCY = quoteEndY + 240;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(avatarCX, avatarCY, avatarR, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    const srcRatio = avatarImg.naturalWidth / avatarImg.naturalHeight;
+    let sx = 0, sy = 0, sw = avatarImg.naturalWidth, sh = avatarImg.naturalHeight;
+    if (srcRatio > 1) {
+      sw = sh;
+      sx = (avatarImg.naturalWidth - sw) / 2;
+    } else {
+      sh = sw;
+      sy = (avatarImg.naturalHeight - sh) / 2;
+    }
+    ctx.drawImage(avatarImg, sx, sy, sw, sh,
+                  avatarCX - avatarR, avatarCY - avatarR, avatarR * 2, avatarR * 2);
+    ctx.restore();
+    ctx.strokeStyle = RED;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(avatarCX, avatarCY, avatarR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Navy footer with logo + team
+  const footerH = 150;
+  const footerY = H - footerH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, W, footerH);
+  const fpadX = 40;
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(footerH * 0.5);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+  }
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.font = `800 32px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", W - fpadX, footerY + footerH * 0.37);
+  ctx.font = `500 24px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("PREMIER GROUP  •  360-431-5915  •  jessecope@remax.net", W - fpadX, footerY + footerH * 0.72);
+}
+
 // STYLE — "Instagram Story (9:16)": vertical 1080x1920 variant designed for
 // Stories and Reels covers. Photo takes the top 55%, red stripe, cream info
 // block in the middle with the address, and a tall navy footer with centered
@@ -9789,6 +10034,32 @@ function BrandedOverlayGraphic({ overlay }) {
         const canvas = canvasRef.current || document.createElement("canvas");
         let styleName = "";
 
+        // ─── TESTIMONIAL PATH (highest priority) ───
+        if (overlay.isTestimonial && overlay.quote) {
+          let avatarImg = null;
+          if (overlay.avatarUrl) {
+            try {
+              const img = new Image();
+              // Data URL for an uploaded avatar; a signed URL would need crossOrigin
+              if (!/^data:/.test(overlay.avatarUrl)) img.crossOrigin = "anonymous";
+              await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = () => reject(new Error("Could not load avatar"));
+                img.src = overlay.avatarUrl;
+              });
+              if (!cancelled) avatarImg = img;
+            } catch (e) { /* avatar is optional */ }
+          }
+          if (cancelled) return;
+
+          renderTestimonialStyle(canvas, {
+            logoImg, colors, avatarImg,
+            label: overlay.label || "CLIENT TESTIMONIAL",
+            quote: overlay.quote,
+            attribution: overlay.attribution || "Happy Client",
+          });
+          styleName = "TESTIMONIAL";
+        } else
         // ─── PHOTO TOUR PATH (single listing, multiple photos) ───
         if (overlay.isTour && Array.isArray(overlay.tourPhotos) && overlay.tourPhotos.length >= 2) {
           // Use the user-selected order (click order = tour position). Fall
@@ -9955,10 +10226,12 @@ function BrandedOverlayGraphic({ overlay }) {
     COLLAGE: "Multi-Listing Collage",
     PHOTO_TOUR: "Photo Tour",
     UPLOADED_PLAIN: "Branded Photo",
+    TESTIMONIAL: "Client Testimonial",
   };
-  // "Try another style" doesn't apply to collages, photo tours, or
-  // label-free uploads (each has only one layout to choose from).
-  const canReroll = styleUsed !== "COLLAGE" && styleUsed !== "PHOTO_TOUR" && styleUsed !== "UPLOADED_PLAIN";
+  // "Try another style" doesn't apply to collages, photo tours, testimonials,
+  // or label-free uploads (each has only one layout).
+  const canReroll = styleUsed !== "COLLAGE" && styleUsed !== "PHOTO_TOUR"
+    && styleUsed !== "UPLOADED_PLAIN" && styleUsed !== "TESTIMONIAL";
 
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
@@ -10410,6 +10683,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
               <div>"just sold"</div>
               <div style={{ fontWeight: 600 }}>PHOTO TOUR:</div>
               <div>"photo tour" / "photo gallery" / "interior photos" / "more photos" (combine with a listing address — shows up to 6 photos of that home in one branded grid)</div>
+              <div style={{ fontWeight: 600 }}>TESTIMONIAL:</div>
+              <div>"testimonial from the Jones family: &quot;quote here&quot;" (produces a quote card with 5 stars + attribution; attach a client photo with 📎 for a circular avatar)</div>
             </div>
           </div>
         )}

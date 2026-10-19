@@ -696,8 +696,10 @@ function newTransaction(type) {
     address: "", city: "", state: "", zip: "",
     sellerName: "", sellerEmail: "", sellerPhone: "",
     sellerRepRole: "", sellerRepName: "",
+    sellerContacts: [],  // additional contacts: [{ id, name, email, phone }]
     buyerName: "",  buyerEmail: "",  buyerPhone: "",
     buyerRepRole: "",  buyerRepName: "",
+    buyerContacts: [],   // additional contacts: [{ id, name, email, phone }]
     listPrice: "", price: "", earnestMoney: "", downPayment: "", closingCosts: "",
     commission: "", listingCommission: "", buyingCommission: "",
     financing: "",
@@ -1604,7 +1606,7 @@ function MainApp({ user }) {
             onCloudRemove={async (id) => { await remove("todo_lists", id); }}
           />
         ) : view === "dashboard" ? (
-          <Dashboard stats={stats} transactions={transactions.filter(t => !isClosedStage(t))} onOpen={setDetail} />
+          <Dashboard stats={stats} transactions={transactions.filter(t => !isClosedStage(t))} onOpen={setDetail} onUpdate={handleSave} />
         ) : view === "futureListings" ? (
           <FutureListings
             onConvertToListing={(prefill) => setEditing({ ...newTransaction("listing"), ...prefill })}
@@ -1683,7 +1685,7 @@ function MainApp({ user }) {
               <EmptyState type={view} onCreate={() => setEditing(newTransaction(view === "buyers" ? "buyer" : "listing"))} />
             ) : (
               <div style={styles.cardGrid}>
-                {filtered.map(t => <TransactionCard key={t.id} txn={t} onClick={() => setDetail(t)} />)}
+                {filtered.map(t => <TransactionCard key={t.id} txn={t} onClick={() => setDetail(t)} onUpdate={handleSave} />)}
               </div>
             )}
           </>
@@ -3213,7 +3215,7 @@ function QuickLaunch({ links, onChange, editing }) {
 // ════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ════════════════════════════════════════════════════════════════════════════
-function Dashboard({ stats, transactions, onOpen }) {
+function Dashboard({ stats, transactions, onOpen, onUpdate }) {
   if (transactions.length === 0) {
     return (
       <div style={styles.welcomeCard}>
@@ -3335,7 +3337,7 @@ function Dashboard({ stats, transactions, onOpen }) {
               if (aPending !== bPending) return aPending - bPending;
               return (a.address || "").localeCompare(b.address || "");
             });
-            return sorted.map(t => <TransactionCard key={t.id} txn={t} onClick={() => onOpen(t)} />);
+            return sorted.map(t => <TransactionCard key={t.id} txn={t} onClick={() => onOpen(t)} onUpdate={onUpdate} />);
           })()}
         </div>
       </section>
@@ -3355,9 +3357,8 @@ function StatCard({ label, value, accent }) {
 // ════════════════════════════════════════════════════════════════════════════
 // TRANSACTION CARD
 // ════════════════════════════════════════════════════════════════════════════
-function TransactionCard({ txn, onClick }) {
+function TransactionCard({ txn, onClick, onUpdate }) {
   const status = STATUS_OPTIONS.find(s => s.value === txn.status) || STATUS_OPTIONS[0];
-  // Only count real tasks (not informational date references) for progress
   const taskMilestones = txn.milestones.filter(m => !m.informational);
   const completedCount = taskMilestones.filter(m => m.complete).length;
   const totalCount = taskMilestones.length;
@@ -3367,12 +3368,90 @@ function TransactionCard({ txn, onClick }) {
     .filter(m => m.date && !m.complete && !m.informational)
     .sort((a, b) => a.date.localeCompare(b.date))[0];
 
+  // Show full names — no last-name-only truncation. Long names wrap naturally.
   const partyLabel = txn.sellerName || txn.buyerName
-    ? `${lastName(txn.sellerName) || "—"} → ${lastName(txn.buyerName) || "—"}`
+    ? `${txn.sellerName || "—"} → ${txn.buyerName || "—"}`
     : "No parties yet";
 
+  // Inline edit state. editMode is null | "parties" | "price" | "expires".
+  const [editMode, setEditMode] = useState(null);
+  const [draftSeller, setDraftSeller] = useState("");
+  const [draftBuyer, setDraftBuyer] = useState("");
+  const [draftPrice, setDraftPrice] = useState("");
+  const [draftExpires, setDraftExpires] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const expMs = (txn.milestones || []).find(m => m.id === "expirationDate");
+  const canInlineEdit = typeof onUpdate === "function";
+
+  const stop = (e) => e.stopPropagation();
+
+  function startEdit(mode, e) {
+    e.stopPropagation();
+    if (mode === "parties") { setDraftSeller(txn.sellerName || ""); setDraftBuyer(txn.buyerName || ""); }
+    else if (mode === "price") { setDraftPrice(txn.price || ""); }
+    else if (mode === "expires") { setDraftExpires(expMs?.date || ""); }
+    setEditMode(mode);
+  }
+  function cancel(e) { e.stopPropagation(); setEditMode(null); }
+
+  async function saveParties(e) {
+    e.stopPropagation();
+    setSaving(true);
+    try {
+      await onUpdate({ ...txn, sellerName: draftSeller.trim(), buyerName: draftBuyer.trim() });
+      setEditMode(null);
+    } catch (err) { alert("Save failed: " + (err.message || err)); }
+    finally { setSaving(false); }
+  }
+  async function savePrice(e) {
+    e.stopPropagation();
+    setSaving(true);
+    try {
+      await onUpdate({ ...txn, price: draftPrice });
+      setEditMode(null);
+    } catch (err) { alert("Save failed: " + (err.message || err)); }
+    finally { setSaving(false); }
+  }
+  async function saveExpires(e) {
+    e.stopPropagation();
+    setSaving(true);
+    try {
+      const nextMs = (txn.milestones || []).map(m =>
+        m.id === "expirationDate" ? { ...m, date: draftExpires } : m
+      );
+      await onUpdate({ ...txn, milestones: nextMs });
+      setEditMode(null);
+    } catch (err) { alert("Save failed: " + (err.message || err)); }
+    finally { setSaving(false); }
+  }
+
+  const pencilBtn = (mode) => canInlineEdit ? (
+    <button type="button" onClick={(e) => startEdit(mode, e)}
+      style={{
+        background: "transparent", border: "none", padding: 3,
+        cursor: "pointer", color: "var(--ink-soft)",
+        display: "inline-flex", alignItems: "center",
+        borderRadius: 4, marginLeft: 4, verticalAlign: "middle",
+      }}
+      title="Edit">
+      <Edit3 size={11} />
+    </button>
+  ) : null;
+
+  const editActions = { display: "flex", gap: 4, marginTop: 6, justifyContent: "flex-end" };
+  const smallBtn = {
+    padding: "4px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer",
+    border: "1px solid var(--ink-line)", background: "var(--paper)",
+    color: "var(--ink)", fontFamily: "inherit",
+  };
+  const primaryBtn = { ...smallBtn, background: "var(--ink)", color: "var(--paper)", borderColor: "var(--ink)" };
+
   return (
-    <button onClick={onClick} style={styles.card} data-card="true">
+    <div role="button" tabIndex={0} onClick={onClick}
+         onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !editMode) { e.preventDefault(); onClick && onClick(); } }}
+         style={{ ...styles.card, textAlign: "left", cursor: "pointer" }}
+         data-card="true">
       <div style={styles.cardHeader}>
         <div style={{
           ...styles.typePill,
@@ -3390,31 +3469,85 @@ function TransactionCard({ txn, onClick }) {
       </div>
       <div style={styles.cardCity}>{[txn.city, txn.state].filter(Boolean).join(", ") || "—"}</div>
 
-      <div style={styles.cardRow}>
-        <span style={{ color: "var(--ink-soft)" }}>Parties</span>
-        <span style={{ fontWeight: 500 }}>{partyLabel}</span>
+      {/* Parties — stacked vertically so long names wrap in full */}
+      <div style={{ padding: "6px 0", borderTop: "1px solid var(--ink-line)", fontSize: 13 }}>
+        <div style={{ color: "var(--ink-soft)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Parties</span>
+          {editMode !== "parties" && pencilBtn("parties")}
+        </div>
+        {editMode === "parties" ? (
+          <div onClick={stop} style={{ marginTop: 6 }}>
+            <input type="text" value={draftSeller} onChange={(e) => setDraftSeller(e.target.value)}
+                   onClick={stop} placeholder="Seller name"
+                   style={{ ...styles.input, padding: "6px 8px", fontSize: 13, width: "100%", marginBottom: 4 }} />
+            <input type="text" value={draftBuyer} onChange={(e) => setDraftBuyer(e.target.value)}
+                   onClick={stop} placeholder="Buyer name"
+                   style={{ ...styles.input, padding: "6px 8px", fontSize: 13, width: "100%" }} />
+            <div style={editActions}>
+              <button onClick={cancel} style={smallBtn} disabled={saving}>Cancel</button>
+              <button onClick={saveParties} style={primaryBtn} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontWeight: 500, lineHeight: 1.3, marginTop: 2, wordBreak: "break-word" }}>
+            {partyLabel}
+          </div>
+        )}
       </div>
-      <div style={styles.cardRow}>
-        <span style={{ color: "var(--ink-soft)" }}>Price</span>
-        <span style={{ fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(txn.price)}</span>
+
+      {/* Price */}
+      <div style={{ padding: "6px 0", borderTop: "1px solid var(--ink-line)", fontSize: 13 }}>
+        {editMode === "price" ? (
+          <div onClick={stop}>
+            <div style={{ color: "var(--ink-soft)", marginBottom: 4 }}>Price</div>
+            <input type="number" value={draftPrice} onChange={(e) => setDraftPrice(e.target.value)} onClick={stop}
+                   placeholder="640000"
+                   style={{ ...styles.input, padding: "6px 8px", fontSize: 13, width: "100%" }} />
+            <div style={editActions}>
+              <button onClick={cancel} style={smallBtn} disabled={saving}>Cancel</button>
+              <button onClick={savePrice} style={primaryBtn} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: "var(--ink-soft)", display: "flex", alignItems: "center" }}>
+              Price {pencilBtn("price")}
+            </span>
+            <span style={{ fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(txn.price)}</span>
+          </div>
+        )}
       </div>
+
       {txn.closingDate && (
         <div style={styles.cardRow}>
           <span style={{ color: "var(--ink-soft)" }}>Closes</span>
           <span style={{ fontWeight: 500 }}>{fmtDateShort(txn.closingDate)}</span>
         </div>
       )}
-      {txn.type === "listing" && (() => {
-        // Show listing expiration date from the informational milestone
-        const expMs = (txn.milestones || []).find(m => m.id === "expirationDate");
-        if (!expMs || !expMs.date) return null;
-        return (
-          <div style={styles.cardRow}>
-            <span style={{ color: "var(--ink-soft)" }}>Expires</span>
-            <span style={{ fontWeight: 500 }}>{fmtDateShort(expMs.date)}</span>
-          </div>
-        );
-      })()}
+
+      {/* Expires — listings only. Show the row whenever we're editing it OR a date is set. */}
+      {txn.type === "listing" && expMs && (editMode === "expires" || expMs.date) && (
+        <div style={{ padding: "6px 0", borderTop: "1px solid var(--ink-line)", fontSize: 13 }}>
+          {editMode === "expires" ? (
+            <div onClick={stop}>
+              <div style={{ color: "var(--ink-soft)", marginBottom: 4 }}>Expires</div>
+              <input type="date" value={draftExpires} onChange={(e) => setDraftExpires(e.target.value)} onClick={stop}
+                     style={{ ...styles.input, padding: "6px 8px", fontSize: 13, width: "100%" }} />
+              <div style={editActions}>
+                <button onClick={cancel} style={smallBtn} disabled={saving}>Cancel</button>
+                <button onClick={saveExpires} style={primaryBtn} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ color: "var(--ink-soft)", display: "flex", alignItems: "center" }}>
+                Expires {pencilBtn("expires")}
+              </span>
+              <span style={{ fontWeight: 500 }}>{fmtDateShort(expMs.date)}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ marginTop: 14 }}>
         <div style={styles.progressTrack}>
@@ -3433,7 +3566,7 @@ function TransactionCard({ txn, onClick }) {
           })()}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -7389,6 +7522,10 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
             </Field>
             <Field label="Email"><input type="email" value={form.sellerEmail} onChange={(e) => update("sellerEmail", e.target.value)} style={styles.input} /></Field>
             <Field label="Phone"><input type="tel" value={form.sellerPhone} onChange={(e) => update("sellerPhone", e.target.value)} style={styles.input} /></Field>
+            <AdditionalContactsBlock
+              contacts={form.sellerContacts || []}
+              onChange={(next) => update("sellerContacts", next)}
+            />
             <RepresentativeBlock
               repRole={form.sellerRepRole}
               repName={form.sellerRepName}
@@ -7404,6 +7541,10 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
             </Field>
             <Field label="Email"><input type="email" value={form.buyerEmail} onChange={(e) => update("buyerEmail", e.target.value)} style={styles.input} /></Field>
             <Field label="Phone"><input type="tel" value={form.buyerPhone} onChange={(e) => update("buyerPhone", e.target.value)} style={styles.input} /></Field>
+            <AdditionalContactsBlock
+              contacts={form.buyerContacts || []}
+              onChange={(next) => update("buyerContacts", next)}
+            />
             <RepresentativeBlock
               repRole={form.buyerRepRole}
               repName={form.buyerRepName}
@@ -7856,16 +7997,19 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
           </div>
 
           {/* Parties */}
-          {(txn.sellerName || txn.buyerName || txn.sellerRepName || txn.buyerRepName) && (
+          {(txn.sellerName || txn.buyerName || txn.sellerRepName || txn.buyerRepName
+            || (txn.sellerContacts || []).length > 0 || (txn.buyerContacts || []).length > 0) && (
             <div style={{ marginTop: 28 }}>
               <div style={styles.formSectionTitle}>
                 <UserCircle2 size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Parties
               </div>
               <div style={styles.partyGrid}>
                 <PartyCard label="Seller" name={txn.sellerName} email={txn.sellerEmail} phone={txn.sellerPhone}
-                           repRole={txn.sellerRepRole} repName={txn.sellerRepName} />
+                           repRole={txn.sellerRepRole} repName={txn.sellerRepName}
+                           extraContacts={txn.sellerContacts} />
                 <PartyCard label="Buyer"  name={txn.buyerName}  email={txn.buyerEmail}  phone={txn.buyerPhone}
-                           repRole={txn.buyerRepRole}  repName={txn.buyerRepName} />
+                           repRole={txn.buyerRepRole}  repName={txn.buyerRepName}
+                           extraContacts={txn.buyerContacts} />
               </div>
             </div>
           )}
@@ -8285,8 +8429,94 @@ function RepresentativeBlock({ repRole, repName, onRoleChange, onNameChange, onR
   );
 }
 
-function PartyCard({ label, name, email, phone, repRole, repName }) {
-  if (!name && !email && !phone && !repName) return null;
+// Edit-form block for N additional seller/buyer contacts (co-owners, spouses
+// with different info, siblings sharing an estate, LLC members, etc.). Each
+// entry has its own Name/Email/Phone + remove button, plus an "+ Add another
+// contact" button at the bottom to append a new empty entry.
+function AdditionalContactsBlock({ contacts, onChange }) {
+  const list = Array.isArray(contacts) ? contacts : [];
+
+  function addOne() {
+    onChange([...list, { id: newId(), name: "", email: "", phone: "" }]);
+  }
+  function updateOne(idx, field, value) {
+    const next = list.slice();
+    next[idx] = { ...next[idx], [field]: value };
+    onChange(next);
+  }
+  function removeOne(idx) {
+    onChange(list.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
+      {list.map((c, idx) => (
+        <div key={c.id || idx} style={{
+          marginBottom: 8,
+          padding: "12px 14px",
+          background: "var(--paper-soft)",
+          border: "1px solid var(--ink-line)",
+          borderRadius: 8,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{
+              fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em",
+              color: "var(--accent)", fontWeight: 600,
+            }}>
+              Additional Contact {list.length > 1 ? `#${idx + 2}` : ""}
+            </div>
+            <button
+              type="button"
+              onClick={() => removeOne(idx)}
+              style={{
+                background: "transparent", border: "none",
+                color: "var(--ink-soft)", fontSize: 11,
+                cursor: "pointer", padding: "2px 6px", borderRadius: 4,
+                fontFamily: "inherit",
+              }}>
+              × Remove
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, gridColumn: "1 / -1" }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Name</div>
+              <input type="text" value={c.name || ""} onChange={(e) => updateOne(idx, "name", e.target.value)}
+                     style={styles.input} placeholder="e.g. Angela Nylund" />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Email</div>
+              <input type="email" value={c.email || ""} onChange={(e) => updateOne(idx, "email", e.target.value)}
+                     style={styles.input} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Phone</div>
+              <input type="tel" value={c.phone || ""} onChange={(e) => updateOne(idx, "phone", e.target.value)}
+                     style={styles.input} />
+            </div>
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addOne}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "6px 12px",
+          background: "transparent",
+          border: "1px dashed var(--ink-line)",
+          borderRadius: 6,
+          fontSize: 12, color: "var(--ink-soft)",
+          cursor: "pointer", fontFamily: "inherit",
+        }}>
+        + Add another contact
+      </button>
+    </div>
+  );
+}
+
+function PartyCard({ label, name, email, phone, repRole, repName, extraContacts }) {
+  const extras = Array.isArray(extraContacts) ? extraContacts.filter(c => c && (c.name || c.email || c.phone)) : [];
+  if (!name && !email && !phone && !repName && extras.length === 0) return null;
   return (
     <div style={styles.partyCard}>
       <div style={styles.partyLabel}>{label}</div>
@@ -8295,6 +8525,18 @@ function PartyCard({ label, name, email, phone, repRole, repName }) {
         {email && <a href={`mailto:${email}`} style={styles.partyLink}><Mail size={12} /> {email}</a>}
         {phone && <a href={`tel:${phone}`} style={styles.partyLink}><Phone size={12} /> {phone}</a>}
       </div>
+      {extras.map((c, i) => (
+        <div key={c.id || i} style={{
+          marginTop: 8, paddingTop: 8,
+          borderTop: "1px dashed var(--ink-line)",
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{c.name || "—"}</div>
+          <div style={styles.partyContacts}>
+            {c.email && <a href={`mailto:${c.email}`} style={styles.partyLink}><Mail size={12} /> {c.email}</a>}
+            {c.phone && <a href={`tel:${c.phone}`} style={styles.partyLink}><Phone size={12} /> {c.phone}</a>}
+          </div>
+        </div>
+      ))}
       {repName && (
         <div style={{
           marginTop: 8, paddingTop: 8,

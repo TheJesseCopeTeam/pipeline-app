@@ -465,8 +465,16 @@ function applyListingAgreement(form, x) {
   if (x.zip)     merged.zip = x.zip;
 
   if (x.sellerName)  merged.sellerName  = x.sellerName;
-  if (x.sellerPhone) merged.sellerPhone = x.sellerPhone;
-  if (x.sellerEmail) merged.sellerEmail = x.sellerEmail;
+  // Roll parsed seller phone/email into the unified contacts list
+  if (x.sellerPhone || x.sellerEmail) {
+    if (!Array.isArray(merged.sellerContactsList)) merged.sellerContactsList = [];
+    merged.sellerContactsList.push({
+      id: newId(), role: "Primary",
+      name: x.sellerName || "",
+      email: x.sellerEmail || "",
+      phone: x.sellerPhone || "",
+    });
+  }
 
   if (x.listPrice) merged.listPrice = String(x.listPrice);
   // Also seed the purchase-price field with list price as a starting value
@@ -694,12 +702,10 @@ function newTransaction(type) {
     type,
     status: "active",
     address: "", city: "", state: "", zip: "",
-    sellerName: "", sellerEmail: "", sellerPhone: "",
-    sellerRepRole: "", sellerRepName: "",
-    sellerContacts: [],  // additional contacts: [{ id, name, email, phone }]
-    buyerName: "",  buyerEmail: "",  buyerPhone: "",
-    buyerRepRole: "",  buyerRepName: "",
-    buyerContacts: [],   // additional contacts: [{ id, name, email, phone }]
+    sellerName: "",
+    sellerContactsList: [],  // [{ id, role, name, email, phone }]
+    buyerName: "",
+    buyerContactsList: [],   // [{ id, role, name, email, phone }]
     listPrice: "", price: "", earnestMoney: "", downPayment: "", closingCosts: "",
     commission: "", listingCommission: "", buyingCommission: "",
     financing: "",
@@ -766,6 +772,62 @@ function migrateV1(old) {
 // Ensures a transaction has the full current schema even if it was created
 // before some field was added. Smart-merges milestones so old data picks up
 // newly-added standard milestones without losing user customizations.
+// ─── Contacts helpers ─────────────────────────────────────────────────
+// New data model: sellerContactsList / buyerContactsList are arrays of
+//   { id, role, name, email, phone }
+// Legacy fields that get rolled into the list on load:
+//   sellerEmail/Phone, sellerRepRole/Name, sellerContacts
+//   (same for buyer*)
+function migrateSideContacts(t, side) {
+  const listKey = `${side}ContactsList`;
+  const existing = t[listKey];
+  if (Array.isArray(existing) && existing.length > 0) return existing;
+
+  const list = [];
+  // Legacy primary email/phone → one "Primary" contact (if either exists)
+  if (t[`${side}Email`] || t[`${side}Phone`]) {
+    list.push({
+      id: newId(),
+      role: "Primary",
+      name: t[`${side}Name`] || "",
+      email: t[`${side}Email`] || "",
+      phone: t[`${side}Phone`] || "",
+    });
+  }
+  // Legacy representative → one contact with that role
+  if (t[`${side}RepName`]) {
+    list.push({
+      id: newId(),
+      role: t[`${side}RepRole`] || "Representative",
+      name: t[`${side}RepName`],
+      email: "",
+      phone: "",
+    });
+  }
+  // Legacy additional contacts
+  if (Array.isArray(t[`${side}Contacts`])) {
+    for (const c of t[`${side}Contacts`]) {
+      if (!c) continue;
+      list.push({
+        id: c.id || newId(),
+        role: c.role || "Primary",
+        name: c.name || "",
+        email: c.email || "",
+        phone: c.phone || "",
+      });
+    }
+  }
+  return list;
+}
+
+// Return the first contact in the list (used for things that need a single
+// email or phone — like the "Email client" button or email templates).
+function getPrimaryContact(txn, side) {
+  const list = txn[`${side}ContactsList`];
+  if (Array.isArray(list) && list.length > 0) return list[0];
+  return { role: "", name: "", email: "", phone: "" };
+}
+
 function ensureTxnSchema(t) {
   const base = newTransaction(t.type || "listing");
   const existingMilestones = t.milestones || [];
@@ -800,6 +862,9 @@ function ensureTxnSchema(t) {
     ...t,
     milestones: [...baseStandards, ...customs],
     contacts: { ...base.contacts, ...(t.contacts || {}) },
+    // Migrate legacy per-side contact fields into the unified list
+    sellerContactsList: migrateSideContacts(t, "seller"),
+    buyerContactsList:  migrateSideContacts(t, "buyer"),
   };
 }
 
@@ -2704,8 +2769,32 @@ function ContactLookupWidget({ transactions, onOpen }) {
     const list = [];
     transactions.forEach(t => {
       const addr = t.address || "(no address)";
-      if (t.sellerName) list.push({ name: t.sellerName, role: "Seller", phone: t.sellerPhone, email: t.sellerEmail, txn: t, context: addr });
-      if (t.buyerName)  list.push({ name: t.buyerName,  role: "Buyer",  phone: t.buyerPhone,  email: t.buyerEmail,  txn: t, context: addr });
+      // Each seller/buyer contact gets its own row with its role
+      (t.sellerContactsList || []).forEach(c => {
+        if (c && (c.name || c.email || c.phone)) {
+          list.push({
+            name: c.name || t.sellerName || "",
+            role: c.role ? `Seller · ${c.role}` : "Seller",
+            phone: c.phone, email: c.email, txn: t, context: addr,
+          });
+        }
+      });
+      (t.buyerContactsList || []).forEach(c => {
+        if (c && (c.name || c.email || c.phone)) {
+          list.push({
+            name: c.name || t.buyerName || "",
+            role: c.role ? `Buyer · ${c.role}` : "Buyer",
+            phone: c.phone, email: c.email, txn: t, context: addr,
+          });
+        }
+      });
+      // Also include just the party name if there are no contacts yet
+      if (t.sellerName && (!t.sellerContactsList || t.sellerContactsList.length === 0)) {
+        list.push({ name: t.sellerName, role: "Seller", txn: t, context: addr });
+      }
+      if (t.buyerName && (!t.buyerContactsList || t.buyerContactsList.length === 0)) {
+        list.push({ name: t.buyerName, role: "Buyer", txn: t, context: addr });
+      }
       CONTACT_ROLES.forEach(role => {
         const c = t.contacts?.[role.key];
         if (c && c.name) list.push({ name: c.name, role: role.label, company: c.company, phone: c.phone, email: c.email, txn: t, context: addr });
@@ -4065,9 +4154,18 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
     }
     setEditing(null);
 
+    const sellerContactsList = (item.ownerPhone || item.ownerEmail)
+      ? [{
+          id: newId(), role: "Primary",
+          name: item.ownerName || "",
+          email: item.ownerEmail || "",
+          phone: item.ownerPhone || "",
+        }]
+      : [];
     onConvertToListing({
       address: item.address, city: item.city, state: item.state, zip: item.zip,
-      sellerName: item.ownerName, sellerPhone: item.ownerPhone, sellerEmail: item.ownerEmail,
+      sellerName: item.ownerName,
+      sellerContactsList,
       listPrice: item.estimatedPrice,
       notes: combinedNotes,
       prelistChecklist: item.prelistChecklist || [],
@@ -4402,10 +4500,17 @@ function FutureBuyers({ onConvertToBuyer, cloudItems, onCloudSave, onCloudRemove
     }
     setEditing(null);
 
+    const buyerContactsList = (item.phone || item.email)
+      ? [{
+          id: newId(), role: "Primary",
+          name: item.name || "",
+          email: item.email || "",
+          phone: item.phone || "",
+        }]
+      : [];
     onConvertToBuyer({
       buyerName: item.name,
-      buyerPhone: item.phone,
-      buyerEmail: item.email,
+      buyerContactsList,
       financing: item.financingType,
       downPayment: item.downPaymentReady,
       contacts: {
@@ -6399,7 +6504,8 @@ The Jesse Cope Team`;
 function draftEmailToClient(txn) {
   const isListing = txn.type === "listing";
   const clientName = isListing ? txn.sellerName : txn.buyerName;
-  const clientEmail = isListing ? txn.sellerEmail : txn.buyerEmail;
+  const primary = getPrimaryContact(txn, isListing ? "seller" : "buyer");
+  const clientEmail = primary.email;
   const greeting = clientName ? `Hi ${clientName.split(" ")[0]},` : "Hi,";
   const address = txn.address || "your property";
   const milestoneLines = buildMilestoneLines(txn);
@@ -7063,9 +7169,15 @@ td:first-child { color: #6b7585; width: 38%; font-size: 12px; }
     <h2>Parties</h2>
     <table>
       ${m("Seller", txn.sellerName)}
-      ${m("", [txn.sellerPhone, txn.sellerEmail].filter(Boolean).join(" · "))}
+      ${(txn.sellerContactsList || []).map(c => m(
+        c.role || "Contact",
+        [c.name, c.phone, c.email].filter(Boolean).join(" · ")
+      )).join("")}
       ${m("Buyer", txn.buyerName)}
-      ${m("", [txn.buyerPhone, txn.buyerEmail].filter(Boolean).join(" · "))}
+      ${(txn.buyerContactsList || []).map(c => m(
+        c.role || "Contact",
+        [c.name, c.phone, c.email].filter(Boolean).join(" · ")
+      )).join("")}
     </table>
   </div>
   <div>
@@ -7517,40 +7629,26 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
 
           {/* Parties */}
           <FormSection title="Seller" icon={UserCircle2}>
-            <Field label="Name" full>
-              <input type="text" value={form.sellerName} onChange={(e) => update("sellerName", e.target.value)} style={styles.input} placeholder="e.g. Brian and Angela Nylund" />
+            <Field label="Seller name" full>
+              <input type="text" value={form.sellerName} onChange={(e) => update("sellerName", e.target.value)}
+                     style={styles.input} placeholder="e.g. Estate of Robert H. Peterson, or Brian and Angela Nylund" />
             </Field>
-            <Field label="Email"><input type="email" value={form.sellerEmail} onChange={(e) => update("sellerEmail", e.target.value)} style={styles.input} /></Field>
-            <Field label="Phone"><input type="tel" value={form.sellerPhone} onChange={(e) => update("sellerPhone", e.target.value)} style={styles.input} /></Field>
-            <AdditionalContactsBlock
-              contacts={form.sellerContacts || []}
-              onChange={(next) => update("sellerContacts", next)}
-            />
-            <RepresentativeBlock
-              repRole={form.sellerRepRole}
-              repName={form.sellerRepName}
-              onRoleChange={(v) => update("sellerRepRole", v)}
-              onNameChange={(v) => update("sellerRepName", v)}
-              onRemove={() => { update("sellerRepRole", ""); update("sellerRepName", ""); }}
+            <ContactsList
+              contacts={form.sellerContactsList || []}
+              onChange={(next) => update("sellerContactsList", next)}
+              side="seller"
             />
           </FormSection>
 
           <FormSection title="Buyer" icon={UserCircle2}>
-            <Field label="Name" full>
-              <input type="text" value={form.buyerName} onChange={(e) => update("buyerName", e.target.value)} style={styles.input} placeholder="e.g. Jaci and Jared Watson" />
+            <Field label="Buyer name" full>
+              <input type="text" value={form.buyerName} onChange={(e) => update("buyerName", e.target.value)}
+                     style={styles.input} placeholder="e.g. Jaci and Jared Watson" />
             </Field>
-            <Field label="Email"><input type="email" value={form.buyerEmail} onChange={(e) => update("buyerEmail", e.target.value)} style={styles.input} /></Field>
-            <Field label="Phone"><input type="tel" value={form.buyerPhone} onChange={(e) => update("buyerPhone", e.target.value)} style={styles.input} /></Field>
-            <AdditionalContactsBlock
-              contacts={form.buyerContacts || []}
-              onChange={(next) => update("buyerContacts", next)}
-            />
-            <RepresentativeBlock
-              repRole={form.buyerRepRole}
-              repName={form.buyerRepName}
-              onRoleChange={(v) => update("buyerRepRole", v)}
-              onNameChange={(v) => update("buyerRepName", v)}
-              onRemove={() => { update("buyerRepRole", ""); update("buyerRepName", ""); }}
+            <ContactsList
+              contacts={form.buyerContactsList || []}
+              onChange={(next) => update("buyerContactsList", next)}
+              side="buyer"
             />
           </FormSection>
 
@@ -7997,19 +8095,15 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
           </div>
 
           {/* Parties */}
-          {(txn.sellerName || txn.buyerName || txn.sellerRepName || txn.buyerRepName
-            || (txn.sellerContacts || []).length > 0 || (txn.buyerContacts || []).length > 0) && (
+          {(txn.sellerName || txn.buyerName
+            || (txn.sellerContactsList || []).length > 0 || (txn.buyerContactsList || []).length > 0) && (
             <div style={{ marginTop: 28 }}>
               <div style={styles.formSectionTitle}>
                 <UserCircle2 size={11} style={{ marginRight: 6, verticalAlign: -1 }} /> Parties
               </div>
               <div style={styles.partyGrid}>
-                <PartyCard label="Seller" name={txn.sellerName} email={txn.sellerEmail} phone={txn.sellerPhone}
-                           repRole={txn.sellerRepRole} repName={txn.sellerRepName}
-                           extraContacts={txn.sellerContacts} />
-                <PartyCard label="Buyer"  name={txn.buyerName}  email={txn.buyerEmail}  phone={txn.buyerPhone}
-                           repRole={txn.buyerRepRole}  repName={txn.buyerRepName}
-                           extraContacts={txn.buyerContacts} />
+                <PartyCard label="Seller" name={txn.sellerName} contactsList={txn.sellerContactsList} />
+                <PartyCard label="Buyer"  name={txn.buyerName}  contactsList={txn.buyerContactsList} />
               </div>
             </div>
           )}
@@ -8145,8 +8239,8 @@ function DetailModal({ txn, onClose, onEdit, onDelete, onUpdate, isCloud }) {
                 />
                 <DraftEmailButton
                   label={txn.type === "listing" ? "Your Seller" : "Your Buyer"}
-                  hint={(txn.type === "listing" ? txn.sellerEmail : txn.buyerEmail) || "no email on file"}
-                  available={!!(txn.type === "listing" ? txn.sellerEmail : txn.buyerEmail)}
+                  hint={getPrimaryContact(txn, txn.type === "listing" ? "seller" : "buyer").email || "no email on file"}
+                  available={!!getPrimaryContact(txn, txn.type === "listing" ? "seller" : "buyer").email}
                   onClick={() => draftEmailToClient(txn)}
                 />
               </div>
@@ -8345,18 +8439,113 @@ function ShareModal({ txn, onClose }) {
   );
 }
 
-// Inside the Seller/Buyer edit section — a small "+ Add representative" button
-// that reveals Role + Name fields for an estate's Personal Representative,
-// an Heir, Power of Attorney, Trustee, etc.
-const REP_ROLES = [
+// Suggested contact roles — users can also type their own value.
+const CONTACT_ROLE_SUGGESTIONS = [
+  "Primary",
+  "Spouse",
   "Personal Representative",
   "Heir",
   "Power of Attorney",
   "Trustee",
   "Executor",
-  "Other",
+  "Attorney",
+  "Agent",
 ];
 
+// The unified contacts list for a Seller or Buyer. Each contact has
+// { id, role, name, email, phone }. All optional, all editable.
+function ContactsList({ contacts, onChange, side }) {
+  const list = Array.isArray(contacts) ? contacts : [];
+  const listId = `contact-roles-${side || "x"}`;
+
+  function addOne() {
+    onChange([...list, { id: newId(), role: "", name: "", email: "", phone: "" }]);
+  }
+  function updateOne(idx, field, value) {
+    const next = list.slice();
+    next[idx] = { ...next[idx], [field]: value };
+    onChange(next);
+  }
+  function removeOne(idx) {
+    onChange(list.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
+      {list.map((c, idx) => (
+        <div key={c.id || idx} style={{
+          marginBottom: 8,
+          padding: "12px 14px",
+          background: "var(--paper-soft)",
+          border: "1px solid var(--ink-line)",
+          borderRadius: 8,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{
+              fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em",
+              color: "var(--accent)", fontWeight: 600,
+            }}>
+              Contact #{idx + 1}
+            </div>
+            <button type="button" onClick={() => removeOne(idx)}
+              style={{
+                background: "transparent", border: "none",
+                color: "var(--ink-soft)", fontSize: 11,
+                cursor: "pointer", padding: "2px 6px", borderRadius: 4,
+                fontFamily: "inherit",
+              }}>
+              × Remove
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Role</div>
+              <input type="text" list={listId} value={c.role || ""}
+                     onChange={(e) => updateOne(idx, "role", e.target.value)}
+                     style={styles.input} placeholder="e.g. Personal Rep, Spouse, Heir..." />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Name</div>
+              <input type="text" value={c.name || ""}
+                     onChange={(e) => updateOne(idx, "name", e.target.value)}
+                     style={styles.input} placeholder="Full name" />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Email</div>
+              <input type="email" value={c.email || ""}
+                     onChange={(e) => updateOne(idx, "email", e.target.value)}
+                     style={styles.input} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--ink-soft)", fontWeight: 500 }}>Phone</div>
+              <input type="tel" value={c.phone || ""}
+                     onChange={(e) => updateOne(idx, "phone", e.target.value)}
+                     style={styles.input} />
+            </div>
+          </div>
+        </div>
+      ))}
+      <datalist id={listId}>
+        {CONTACT_ROLE_SUGGESTIONS.map(r => <option key={r} value={r} />)}
+      </datalist>
+      <button type="button" onClick={addOne}
+        style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          padding: "8px 14px",
+          background: "transparent",
+          border: "1px dashed var(--ink-line)",
+          borderRadius: 6,
+          fontSize: 13, color: "var(--ink-soft)",
+          cursor: "pointer", fontFamily: "inherit",
+        }}>
+        + Add contact
+      </button>
+    </div>
+  );
+}
+
+// Legacy block kept behind the new name so any missed callers error loudly
+// at runtime rather than silently showing old UI.
 function RepresentativeBlock({ repRole, repName, onRoleChange, onNameChange, onRemove }) {
   const hasRep = !!(repRole || repName);
   if (!hasRep) {
@@ -8514,45 +8703,37 @@ function AdditionalContactsBlock({ contacts, onChange }) {
   );
 }
 
-function PartyCard({ label, name, email, phone, repRole, repName, extraContacts }) {
-  const extras = Array.isArray(extraContacts) ? extraContacts.filter(c => c && (c.name || c.email || c.phone)) : [];
-  if (!name && !email && !phone && !repName && extras.length === 0) return null;
+function PartyCard({ label, name, contactsList }) {
+  const list = Array.isArray(contactsList) ? contactsList.filter(c => c && (c.name || c.email || c.phone || c.role)) : [];
+  if (!name && list.length === 0) return null;
   return (
     <div style={styles.partyCard}>
       <div style={styles.partyLabel}>{label}</div>
       <div style={styles.partyName}>{name || "—"}</div>
-      <div style={styles.partyContacts}>
-        {email && <a href={`mailto:${email}`} style={styles.partyLink}><Mail size={12} /> {email}</a>}
-        {phone && <a href={`tel:${phone}`} style={styles.partyLink}><Phone size={12} /> {phone}</a>}
-      </div>
-      {extras.map((c, i) => (
+      {list.map((c, i) => (
         <div key={c.id || i} style={{
           marginTop: 8, paddingTop: 8,
           borderTop: "1px dashed var(--ink-line)",
         }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{c.name || "—"}</div>
+          {c.role && (
+            <div style={{
+              fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em",
+              color: "var(--accent)", fontWeight: 600, marginBottom: 2,
+            }}>
+              {c.role}
+            </div>
+          )}
+          {c.name && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>
+              {c.name}
+            </div>
+          )}
           <div style={styles.partyContacts}>
             {c.email && <a href={`mailto:${c.email}`} style={styles.partyLink}><Mail size={12} /> {c.email}</a>}
             {c.phone && <a href={`tel:${c.phone}`} style={styles.partyLink}><Phone size={12} /> {c.phone}</a>}
           </div>
         </div>
       ))}
-      {repName && (
-        <div style={{
-          marginTop: 8, paddingTop: 8,
-          borderTop: "1px dashed var(--ink-line)",
-          fontSize: 12, color: "var(--ink-soft)", fontStyle: "italic",
-        }}>
-          <div style={{
-            fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em",
-            color: "var(--accent)", fontWeight: 600, fontStyle: "normal",
-            marginBottom: 2,
-          }}>
-            {repRole || "Representative"}
-          </div>
-          {repName}
-        </div>
-      )}
     </div>
   );
 }

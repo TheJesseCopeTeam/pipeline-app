@@ -378,8 +378,22 @@ If making multiple separate posts, join them with "\\n\\n═══════�
 // its address appear in the message, OR if the street number appears as a
 // standalone token (common shorthand like "1745").
 function findMentionedListings(text, listings) {
-  if (!text || !Array.isArray(listings)) return [];
+  if (!text || !Array.isArray(listings) || listings.length === 0) return [];
   const lowered = String(text).toLowerCase();
+
+  // Catch-all phrases: user wants ALL active listings
+  if (/\b(all (my )?(active )?listings|every (active )?listing|all my properties|all (active )?properties|roundup|new listings together|group listing|multi[-\s]?listing)\b/.test(lowered)) {
+    return listings.slice();
+  }
+
+  // "a listing" / "one listing" / "any listing" / "pick a listing" — generic
+  // single-listing request with no specific address. Fall back to the first
+  // active listing as a reasonable default.
+  if (/\b(a listing|one listing|any listing|pick (a|one) listing|just (one|a) listing|some listing|my listing)\b/.test(lowered)) {
+    return [listings[0]];
+  }
+
+  // Address-based matching: look for parts of each listing's address in the text
   const found = [];
   for (const l of listings) {
     if (!l.address) continue;
@@ -800,6 +814,19 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     post: cleaned,
     photos: photosForFrontend,
     overlay, // Frontend will render the branded image via Canvas
+    // Diagnostic info — safe to read in dev tools to figure out why photos
+    // aren't appearing. Lists what the backend matched and fetched.
+    _debug: {
+      mentionedCount: mentioned.length,
+      mentionedAddresses: mentioned.map(l => l.address || "(no address)"),
+      activeListingsSeen: (activeListings || []).length,
+      activeListingsWithPhotos: (activeListings || []).filter(l => (l.photoDocIds || []).length > 0).length,
+      activeListingAddresses: (activeListings || []).map(l => `${l.address || "(no addr)"} [${(l.photoDocIds || []).length} photos${l.coverPhotoId ? " + cover" : ""}]`),
+      photosFetched: photoAtt.length,
+      nwmlsFetched: nwmlsAtt.length,
+      overlayTemplate: overlay ? overlay.template : null,
+      overlayBuilt: !!overlay,
+    },
   };
 }
 

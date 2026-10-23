@@ -702,6 +702,7 @@ function newTransaction(type) {
     type,
     status: "active",
     address: "", city: "", state: "", zip: "",
+    propertyWebsite: "",     // RE/MAX individual property landing page URL
     sellerName: "",
     sellerContactsList: [],  // [{ id, role, name, email, phone }]
     buyerName: "",
@@ -1652,6 +1653,7 @@ function MainApp({ user }) {
             stats={stats}
             futureListings={futureListings}
             futureBuyers={futureBuyers}
+            vendors={vendors}
             todoLists={todoLists}
             onTodoListsCloudSave={async (list) => { await upsert("todo_lists", list); }}
             appSettings={appSettings}
@@ -1884,7 +1886,7 @@ const HOME_LABEL = "Kalama, WA";
 // Edit mode lets you add/remove/reorder widgets across two columns.
 // All widget data and layout auto-saves per device.
 // ════════════════════════════════════════════════════════════════════════════
-function HomeBase({ transactions, stats, futureListings, futureBuyers, todoLists, onTodoListsCloudSave, appSettings, updateSetting, isCloud, onOpen, onNewListing, onNewBuyer, onGoToPipeline, onGoToView }) {
+function HomeBase({ transactions, stats, futureListings, futureBuyers, vendors, todoLists, onTodoListsCloudSave, appSettings, updateSetting, isCloud, onOpen, onNewListing, onNewBuyer, onGoToPipeline, onGoToView }) {
   const [layout, setLayout] = useState(DEFAULT_LAYOUT);
   const [editMode, setEditMode] = useState(false);
   const [showAddPanel, setShowAddPanel] = useState(false);
@@ -1997,6 +1999,7 @@ function HomeBase({ transactions, stats, futureListings, futureBuyers, todoLists
     transactions, stats, onOpen, urgent, weather, editMode,
     futureListings: futureListings || [],
     futureBuyers: futureBuyers || [],
+    vendors: vendors || [],
     todoLists: todoLists || [],
     onTodoListsCloudSave,
     appSettings: appSettings || {},
@@ -2203,7 +2206,13 @@ function renderWidget(widget, props) {
     case "quickLaunch":  return <QuickLaunchWidget homeEditMode={props.editMode} isCloud={props.isCloud} appSettings={props.appSettings} updateSetting={props.updateSetting} />;
     case "recent":       return <RecentWidget transactions={transactions} onOpen={onOpen} />;
     case "calculator":   return <CalculatorWidget />;
-    case "contactLookup":return <ContactLookupWidget transactions={transactions} onOpen={onOpen} />;
+    case "contactLookup":return <ContactLookupWidget
+      transactions={transactions}
+      onOpen={onOpen}
+      futureListings={futureListings}
+      futureBuyers={futureBuyers}
+      vendors={props.vendors || []}
+    />;
     case "habits":       return <HabitsWidget isCloud={props.isCloud} appSettings={props.appSettings} updateSetting={props.updateSetting} />;
     // Legacy widget types — kept so existing saved layouts don't crash on load.
     // They render nothing; user is expected to remove them in Customize mode.
@@ -2762,20 +2771,24 @@ function CalcResult({ label, value, highlight }) {
 }
 
 // ─── Quick Contact Lookup Widget ─────────────────────────────────────────────
-function ContactLookupWidget({ transactions, onOpen }) {
+function ContactLookupWidget({ transactions, onOpen, futureListings = [], futureBuyers = [], vendors = [] }) {
   const [query, setQuery] = useState("");
-  // Flatten all contacts across all transactions
+  const [exporting, setExporting] = useState(false);
+
+  // Flatten EVERY contact across transactions, vendors, future listings, and
+  // future buyers. The widget uses this for both searching and CSV export.
   const allContacts = useMemo(() => {
     const list = [];
+
+    // ─── Transaction contacts ───
     transactions.forEach(t => {
       const addr = t.address || "(no address)";
-      // Each seller/buyer contact gets its own row with its role
       (t.sellerContactsList || []).forEach(c => {
         if (c && (c.name || c.email || c.phone)) {
           list.push({
             name: c.name || t.sellerName || "",
             role: c.role ? `Seller · ${c.role}` : "Seller",
-            phone: c.phone, email: c.email, txn: t, context: addr,
+            phone: c.phone, email: c.email, company: "", txn: t, context: addr,
           });
         }
       });
@@ -2784,24 +2797,106 @@ function ContactLookupWidget({ transactions, onOpen }) {
           list.push({
             name: c.name || t.buyerName || "",
             role: c.role ? `Buyer · ${c.role}` : "Buyer",
-            phone: c.phone, email: c.email, txn: t, context: addr,
+            phone: c.phone, email: c.email, company: "", txn: t, context: addr,
           });
         }
       });
-      // Also include just the party name if there are no contacts yet
       if (t.sellerName && (!t.sellerContactsList || t.sellerContactsList.length === 0)) {
-        list.push({ name: t.sellerName, role: "Seller", txn: t, context: addr });
+        list.push({ name: t.sellerName, role: "Seller", company: "", txn: t, context: addr });
       }
       if (t.buyerName && (!t.buyerContactsList || t.buyerContactsList.length === 0)) {
-        list.push({ name: t.buyerName, role: "Buyer", txn: t, context: addr });
+        list.push({ name: t.buyerName, role: "Buyer", company: "", txn: t, context: addr });
       }
       CONTACT_ROLES.forEach(role => {
         const c = t.contacts?.[role.key];
-        if (c && c.name) list.push({ name: c.name, role: role.label, company: c.company, phone: c.phone, email: c.email, txn: t, context: addr });
+        if (c && c.name) list.push({
+          name: c.name, role: role.label, company: c.company,
+          phone: c.phone, email: c.email, txn: t, context: addr,
+        });
       });
     });
+
+    // ─── Vendors ───
+    (vendors || []).forEach(v => {
+      const data = v.data || v;
+      if (data && data.name) {
+        list.push({
+          name: data.name,
+          role: data.category ? `Vendor · ${data.category}` : "Vendor",
+          company: data.company || "",
+          phone: data.phone || "",
+          email: data.email || "",
+          txn: null,
+          context: data.notes || "Vendor",
+        });
+      }
+    });
+
+    // ─── Future listings — owner contacts ───
+    (futureListings || []).forEach(f => {
+      const data = f.data || f;
+      if (data && (data.ownerName || data.ownerPhone || data.ownerEmail)) {
+        list.push({
+          name: data.ownerName || "(unnamed owner)",
+          role: "Future Listing Owner",
+          company: "",
+          phone: data.ownerPhone || "",
+          email: data.ownerEmail || "",
+          txn: null,
+          context: data.address || "Future Listing",
+        });
+      }
+    });
+
+    // ─── Future buyers ───
+    (futureBuyers || []).forEach(f => {
+      const data = f.data || f;
+      if (data && (data.name || data.phone || data.email)) {
+        list.push({
+          name: data.name || "(unnamed buyer)",
+          role: "Future Buyer",
+          company: "",
+          phone: data.phone || "",
+          email: data.email || "",
+          txn: null,
+          context: "Future Buyer",
+        });
+      }
+    });
+
     return list;
-  }, [transactions]);
+  }, [transactions, vendors, futureListings, futureBuyers]);
+
+  // CSV export — downloads every contact as a CSV file
+  function downloadCSV() {
+    setExporting(true);
+    try {
+      const esc = (v) => {
+        const s = String(v == null ? "" : v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const header = ["Name", "Role", "Company", "Phone", "Email", "Context"];
+      const rows = allContacts.map(c => [
+        esc(c.name), esc(c.role), esc(c.company), esc(c.phone), esc(c.email), esc(c.context),
+      ].join(","));
+      const csv = header.join(",") + "\n" + rows.join("\n");
+      // Trigger browser download
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const today = new Date().toISOString().slice(0, 10);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `jct-contacts-${today}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Export failed: " + (e.message || e));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const q = query.trim().toLowerCase();
   const filtered = q
@@ -2815,7 +2910,20 @@ function ContactLookupWidget({ transactions, onOpen }) {
 
   return (
     <div>
-      <h2 style={styles.sectionTitle}>Quick Contact Lookup</h2>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <h2 style={{ ...styles.sectionTitle, marginBottom: 0 }}>Quick Contact Lookup</h2>
+        <button
+          onClick={downloadCSV}
+          disabled={exporting || allContacts.length === 0}
+          title={allContacts.length === 0 ? "No contacts yet" : `Download ${allContacts.length} contact${allContacts.length === 1 ? "" : "s"} as CSV`}
+          style={{
+            ...styles.btn, ...styles.btnGhost,
+            padding: "6px 12px", fontSize: 12,
+            opacity: (exporting || allContacts.length === 0) ? 0.5 : 1,
+          }}>
+          <Download size={12} /> {exporting ? "Exporting…" : `Export CSV (${allContacts.length})`}
+        </button>
+      </div>
       <div style={{ ...styles.todoBoxCard, padding: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--paper)", border: "1px solid var(--ink-line)", borderRadius: 8 }}>
           <Search size={14} style={{ color: "var(--ink-soft)" }} />
@@ -3584,6 +3692,22 @@ function TransactionCard({ txn, onClick, onUpdate }) {
         <div style={styles.cardRow}>
           <span style={{ color: "var(--ink-soft)" }}>Expires</span>
           <span style={{ fontWeight: 500 }}>{fmtDateShort(expMs.date)}</span>
+        </div>
+      )}
+
+      {/* Property website link — listings only */}
+      {txn.type === "listing" && txn.propertyWebsite && (
+        <div style={{ padding: "6px 0", borderTop: "1px solid var(--ink-line)", fontSize: 13 }}>
+          <a href={txn.propertyWebsite}
+             target="_blank" rel="noopener noreferrer"
+             onClick={(e) => e.stopPropagation()}
+             style={{
+               color: "var(--accent)", textDecoration: "none",
+               display: "inline-flex", alignItems: "center", gap: 4,
+               fontWeight: 500,
+             }}>
+            🔗 View property website
+          </a>
         </div>
       )}
 
@@ -7574,6 +7698,14 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
                 {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </Field>
+            {form.type === "listing" && (
+              <Field label="Property Website (optional)" full>
+                <input type="url" value={form.propertyWebsite || ""}
+                       onChange={(e) => update("propertyWebsite", e.target.value)}
+                       style={styles.input}
+                       placeholder="https://1745-23rd-avenue.remax.com" />
+              </Field>
+            )}
           </FormSection>
 
           {/* Parties */}
@@ -10838,6 +10970,7 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         state: t.state || "",
         listPrice: t.listPrice || t.price || "",
         beds: t.beds, baths: t.baths, sqft: t.sqft,
+        propertyWebsite: t.propertyWebsite || "",
         hasNwmls: (t.documents || []).some(d => d.section === "nwmls"),
         photoCount: (t.documents || []).filter(d => d.section === "photo").length,
         // Phase B: send NWMLS printout doc IDs so backend can fetch the PDF

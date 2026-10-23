@@ -11014,11 +11014,9 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         id: newId(),
         role: "assistant",
         content: data.post || data.reply || "",
-        // Phase C: photos the backend returned for this response (signed URLs)
         photos: Array.isArray(data.photos) ? data.photos : [],
-        // Phase D (updated): backend sends overlay INSTRUCTIONS; frontend
-        // renders the branded graphic on an HTML Canvas using browser fonts.
         overlay: data.overlay || null,
+        _debug: data._debug || null, // Diagnostic info — shown as a small box
         ts: Date.now(),
       };
       setMessages(prev => [...prev, assistantMsg]);
@@ -11133,6 +11131,21 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
               ) : (
                 <div style={s.aiBubble}>
                   {m.content}
+                  {m._debug && (
+                    <div style={{
+                      marginTop: 10, padding: "8px 10px",
+                      background: "#F5F0E6", border: "1px dashed #D8CFBE",
+                      borderRadius: 6, fontSize: 11, color: "#8A7E6B",
+                      fontFamily: "monospace", lineHeight: 1.5,
+                    }}>
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>🔍 DEBUG</div>
+                      <div>mentioned: {m._debug.mentionedCount} ({(m._debug.mentionedAddresses || []).join(", ") || "none"})</div>
+                      <div>photos fetched: {m._debug.photosFetched}</div>
+                      <div>overlay built: {String(m._debug.overlayBuilt)} ({m._debug.overlayTemplate || "none"})</div>
+                      <div>active listings seen: {m._debug.activeListingsSeen} ({m._debug.activeListingsWithPhotos} with photos)</div>
+                      <div style={{ marginTop: 4, wordBreak: "break-all" }}>all listings: {(m._debug.activeListingAddresses || []).join(" | ")}</div>
+                    </div>
+                  )}
                   {m.overlay && <BrandedOverlayGraphic overlay={m.overlay} />}
                   {Array.isArray(m.photos) && m.photos.length > 0 && (
                     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>

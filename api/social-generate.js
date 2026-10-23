@@ -468,6 +468,51 @@ async function fetchPhotoAttachments(mentionedListings) {
   return results;
 }
 
+// ───── Testimonial helpers ─────────────────────────────────────────────
+
+// Detect testimonial / client review intent
+function isTestimonialRequest(text) {
+  const t = (text || "").toLowerCase();
+  return /\b(testimonial|client review|customer review|review from|quote from|client said|customer said|client wrote|review:|testimonial:)\b/.test(t);
+}
+
+// Pull the actual quote text out of the user's message. Looks for curly or
+// straight quotes first (most common), then falls back to text after a
+// "testimonial:" / "review:" / "quote:" prefix.
+function extractQuote(text) {
+  if (!text) return null;
+  const curly = text.match(/[“"]([^“”"]{10,600})[”"]/);
+  if (curly) return curly[1].trim();
+  const single = text.match(/[‘']([^‘’']{10,600})[’']/);
+  if (single) return single[1].trim();
+  // Prefix fallback — stop at "- X" / "— X" (attribution) or end of string
+  const prefixed = text.match(/(?:testimonial|review|quote|client (?:said|wrote))\s*:?\s+(.{10,600}?)(?:\s*[-—]\s*[A-Z]|\s*$)/i);
+  if (prefixed) return prefixed[1].trim().replace(/[.!?]+$/, "") + ".";
+  return null;
+}
+
+// Pull the attribution/name out of the user's message. Looks for
+// "— John Smith", "from the Smith family", "from John Smith", etc.
+function extractAttribution(text) {
+  if (!text) return null;
+  // Em-dash or hyphen followed by a Name at the end of the string
+  const dash = text.match(/[-—]\s*(?:the\s+)?([A-Z][A-Za-z .']+(?:\s+(?:family|Family))?)\s*$/);
+  if (dash) {
+    const raw = dash[1].trim();
+    // Normalize "jones family" / "Jones family" → "The Jones Family"
+    const fam = raw.match(/^([A-Z][A-Za-z]+)\s+family$/i);
+    if (fam) return `The ${fam[1][0].toUpperCase() + fam[1].slice(1).toLowerCase()} Family`;
+    return raw;
+  }
+  // "from the Jones family"
+  const family = text.match(/from\s+the\s+([A-Z][A-Za-z]+)\s+family/i);
+  if (family) return `The ${family[1][0].toUpperCase() + family[1].slice(1).toLowerCase()} Family`;
+  // "from John Smith" / "by John Smith"
+  const fullName = text.match(/(?:from|by)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})/);
+  if (fullName) return fullName[1].trim();
+  return null;
+}
+
 // Parse a data URL (e.g. "data:image/jpeg;base64,/9j/...") into
 // { mediaType, data } for passing to the Anthropic API.
 function parseDataUrl(dataUrl) {
@@ -490,6 +535,7 @@ async function doChat({ messages, activeListings, uploadedPhoto }) {
         if (l.sqft) parts.push(`${Number(l.sqft).toLocaleString()} sqft`);
         parts.push(`NWMLS printout: ${l.hasNwmls ? "yes" : "no"}`);
         parts.push(`Photos: ${l.photoCount || 0}`);
+        if (l.propertyWebsite) parts.push(`Property website: ${l.propertyWebsite}`);
         return parts.join(" | ");
       }).join("\n")
     : "(none in the app yet)";
@@ -501,10 +547,32 @@ async function doChat({ messages, activeListings, uploadedPhoto }) {
     ? `\n\nJesse has ATTACHED HIS OWN PHOTO to this message. This is NOT a listing-based post. Write a post that fits whatever he's showing in the photo + whatever his message asks for (team event, celebration, hiring, community, closing announcement, etc.). Do not invent listing details and do not add bracketed [price] placeholders unless he's clearly asking for a price-focused post.`
     : "";
 
+  const testimonialNote = isTestimonialRequest(messages?.[messages.length - 1]?.content || "")
+    ? `\n\nJesse is sharing a CLIENT TESTIMONIAL. Write a short thank-you post that:
+- Opens with a warm thank-you headline (e.g. "GRATEFUL FOR CLIENTS LIKE THESE 🙏")
+- Includes the testimonial quote in quotation marks exactly as Jesse provided it (do not reword it)
+- Credits the client by name as Jesse mentioned them
+- Adds 1-2 sentences about why reviews like this mean a lot and that Jesse is grateful to serve Cowlitz County / Longview area clients
+- Ends with 6-8 hashtags including #ClientLove #Testimonial #JesseCopeTeam #LongviewWA
+- Length: 100-180 words
+- Do NOT invent a quote or embellish the client's words.`
+    : "";
+
   const system = `You write Facebook and Instagram posts for Jesse Cope, a real estate broker at RE/MAX Premier Group in Longview, WA.
 
 Jesse's active listings:
-${listingLines}${uploadNote}
+${listingLines}${uploadNote}${testimonialNote}
+
+PROPERTY WEBSITE CTA (very important):
+- When a post is about a specific listing AND that listing has a "Property website:" URL in the list above, you MUST include a call-to-action line near the end of the post (just before the hashtags) that uses the ACTUAL URL. Example formats you can use (vary them):
+  - "👉 Click here for more photos and details: <URL>"
+  - "📸 All photos + full details: <URL>"
+  - "🔗 Tour the home online: <URL>"
+  - "See every room → <URL>"
+- Replace <URL> with the exact URL from the listing's "Property website:" field. Never leave <URL> as a placeholder.
+- If a listing has no property website URL, write a generic nudge like "DM me for more info and photos" or "Call/text 360-431-5915 for more details" instead.
+- For multi-listing posts, include the CTAs for each listing's URL (or a single generic nudge if some lack URLs).
+- For non-listing posts (uploaded photos, general content), skip the property-website CTA entirely.
 
 YOUR JOB: Write the post. Every message. No exceptions.
 
@@ -626,6 +694,23 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   // of a SINGLE listing — we show up to 6 photos in one branded grid.
   const photoTourIntent = /\b(photo\s+tour|photo\s+gallery|photos?\s+gallery|interior\s+photos|more\s+photos|multiple\s+photos|all\s+the\s+photos|\d+\s+photos?|photo\s+collage|photo\s+roundup|tour\s+of\s+the\s+(home|house|listing))\b/i.test(lastText);
 
+  // Phase J: Testimonial path — highest priority. If Jesse's message signals
+  // a testimonial AND contains a quote, build a quote-card overlay.
+  const testimonialIntent = isTestimonialRequest(lastText);
+  const testimonialQuote = testimonialIntent ? extractQuote(lastText) : null;
+  const testimonialAttribution = testimonialIntent ? (extractAttribution(lastText) || "Happy Client") : null;
+
+  if (testimonialIntent && testimonialQuote) {
+    overlay = {
+      template: "TESTIMONIAL",
+      label: "CLIENT TESTIMONIAL",
+      quote: testimonialQuote,
+      attribution: testimonialAttribution,
+      // If Jesse also uploaded a photo, use it as the client avatar
+      avatarUrl: parsedUpload ? uploadedPhoto : null,
+      isTestimonial: true,
+    };
+  } else
   // Phase F: Uploaded-photo path takes priority when Jesse attached his own photo
   if (parsedUpload) {
     overlay = {

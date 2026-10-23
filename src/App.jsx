@@ -1203,6 +1203,10 @@ function MainApp({ user }) {
   // and consulted only in cloud mode. In local mode each widget falls back
   // to its localStorage key.
   const [appSettings, setAppSettings] = useState({});
+  // Timestamp of our last local settings write. We use this to suppress the
+  // Supabase realtime echo of our own writes, which otherwise races with
+  // optimistic UI updates (e.g. Quick Launch edits reverting mid-edit).
+  const lastSettingsWriteRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("home");
   const [editing, setEditing] = useState(null);
@@ -1309,6 +1313,10 @@ function MainApp({ user }) {
       subscribeToTable("todo_lists", () => reloadTable("todo_lists", setTodoLists, false)),
       // user_settings is a single-row table per user — just reload on any change
       subscribeToTable("user_settings", async () => {
+        // Suppress echoes of our own writes — if we wrote in the last 3 seconds,
+        // skip the realtime reload. The cloud already has our value; reloading
+        // can race and overwrite optimistic UI updates mid-edit (Quick Launch bug).
+        if (Date.now() - lastSettingsWriteRef.current < 3000) return;
         try { const fresh = await loadSettings(); setAppSettings(fresh || {}); }
         catch (e) { console.error("Reload settings failed:", e); }
       }),
@@ -1332,8 +1340,11 @@ function MainApp({ user }) {
     const next = { ...appSettings, [key]: value };
     setAppSettings(next);
     if (isCloud) {
+      lastSettingsWriteRef.current = Date.now(); // Mark write so realtime echo is suppressed
       try { await saveSettings(next); }
       catch (e) { console.error(`Save setting ${key} failed:`, e); }
+      // Keep suppression window alive until the write + echo round-trip completes
+      lastSettingsWriteRef.current = Date.now();
     }
   };
 
@@ -2658,7 +2669,11 @@ function QuickLaunchWidget({ homeEditMode, isCloud, appSettings, updateSetting }
     }
   };
 
-  const editing = editingLinks || homeEditMode;
+  // Only enter per-tile edit mode when the user explicitly clicks "Edit" on
+  // this widget. If we also entered edit mode during the HOME Customize mode,
+  // the WidgetSlot wrapper's pointerEvents:none disables all the tile edit
+  // controls (add/remove), which is confusing.
+  const editing = editingLinks;
 
   return (
     <div>

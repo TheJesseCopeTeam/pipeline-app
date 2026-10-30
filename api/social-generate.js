@@ -381,18 +381,19 @@ function findMentionedListings(text, listings) {
   if (!text || !Array.isArray(listings) || listings.length === 0) return [];
   const lowered = String(text).toLowerCase();
 
-  // Vacant land filter: when the user mentions vacant land / lots / acreage,
-  // narrow to listings that don't have residential specs (beds/baths/sqft) or
-  // that have a lotSize set.
+  // Vacant land filter: more generous — if lotSize is set OR if the listing
+  // has no beds AND no baths (sqft optional). Covers typical land listings
+  // where some data fields are left blank.
   const wantsVacantLand = /\bvacant\s+land\b|\bland\s+listings?\b|\blots?\b|\bacreage\b/.test(lowered);
   const isVacantLand = (l) =>
-    (l.lotSize && !l.beds && !l.baths) ||
-    (!l.beds && !l.baths && !l.sqft);
+    !!l.lotSize || (!l.beds && !l.baths);
 
-  // "all my X listings" / "every X listing" — matches even with words in
-  // between (like "all my VACANT LAND listings" or "every active listing")
-  const allPhrase = /\ball\s+(?:my\s+|the\s+)?(?:[a-z\-]+\s+){0,3}(?:listings|properties)\b/i.test(lowered)
-    || /\bevery\s+(?:[a-z\-]+\s+){0,3}listing\b/i.test(lowered)
+  // "all my X listings" — generous match that handles ANY words between
+  // "all" and "listings", so phrases like "all my vacant land listings",
+  // "all my active residential listings", etc. all work.
+  const allPhrase = /\ball\s+(?:my\s+|the\s+)?(?:[^.?!]{0,60}?\s+)?listings?\b/i.test(lowered)
+    || /\ball\s+(?:my\s+|the\s+)?(?:[^.?!]{0,60}?\s+)?properties\b/i.test(lowered)
+    || /\bevery\s+(?:[^.?!]{0,60}?\s+)?listing\b/i.test(lowered)
     || /\broundup\b/.test(lowered)
     || /\bnew\s+listings\s+together\b/.test(lowered)
     || /\bgroup\s+listing\b/.test(lowered)
@@ -402,8 +403,7 @@ function findMentionedListings(text, listings) {
     return subset;
   }
 
-  // Standalone vacant-land request (no "all listings" wrapper) — treat as
-  // "all vacant land listings" automatically
+  // Standalone vacant-land request — "post for vacant land", "my land listings"
   if (wantsVacantLand) {
     return listings.filter(isVacantLand);
   }
@@ -808,7 +808,15 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       tourPhotos,
       isTour: true,
     };
-  } else if (overlayInfo && photoAtt.length > 0) {
+  } else if (mentioned.length > 0 && photoAtt.length > 0) {
+    // Build an overlay whenever there are listings + photos. If no explicit
+    // trigger word matched, fall back to a generic "NEW LISTING(S)" template
+    // so Jesse always gets a branded graphic for listing posts.
+    const effectiveTemplate = overlayInfo ? overlayInfo.template
+      : (mentioned.length > 1 ? "NEW_LISTING" : "NEW_LISTING");
+    const effectiveLabel = overlayInfo ? templateLabel(overlayInfo.template)
+      : (mentioned.length > 1 ? "NEW LISTINGS" : "NEW LISTING");
+
     // Group photos by their listingId so we can find each listing's cover
     const photosByListing = {};
     for (const p of photoAtt) {
@@ -836,7 +844,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
 
     if (listingsForOverlay.length > 0) {
       // Compute price for the badge (single-listing case only)
-      let badgePrice = overlayInfo.args.subtitle || "";
+      let badgePrice = (overlayInfo && overlayInfo.args.subtitle) || "";
       if (!badgePrice && firstMentioned && firstMentioned.listPrice) {
         badgePrice = `$${Number(firstMentioned.listPrice).toLocaleString()}`;
       }
@@ -844,13 +852,11 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       const isMulti = listingsForOverlay.length > 1;
 
       overlay = {
-        template: overlayInfo.template,
-        label: templateLabel(overlayInfo.template),
+        template: effectiveTemplate,
+        label: effectiveLabel,
         subtitle: isMulti ? "" : badgePrice,
-        // Backward-compat for single-listing styles that read `sourceUrl` and `listing`
         sourceUrl: listingsForOverlay[0].sourceUrl,
         listing: listingsForOverlay[0],
-        // New: full array of listings for the collage renderer
         listings: listingsForOverlay,
         isMulti,
       };

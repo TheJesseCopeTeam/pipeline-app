@@ -381,14 +381,34 @@ function findMentionedListings(text, listings) {
   if (!text || !Array.isArray(listings) || listings.length === 0) return [];
   const lowered = String(text).toLowerCase();
 
-  // Catch-all phrases: user wants ALL active listings
-  if (/\b(all (my )?(active )?listings|every (active )?listing|all my properties|all (active )?properties|roundup|new listings together|group listing|multi[-\s]?listing)\b/.test(lowered)) {
-    return listings.slice();
+  // Vacant land filter: when the user mentions vacant land / lots / acreage,
+  // narrow to listings that don't have residential specs (beds/baths/sqft) or
+  // that have a lotSize set.
+  const wantsVacantLand = /\bvacant\s+land\b|\bland\s+listings?\b|\blots?\b|\bacreage\b/.test(lowered);
+  const isVacantLand = (l) =>
+    (l.lotSize && !l.beds && !l.baths) ||
+    (!l.beds && !l.baths && !l.sqft);
+
+  // "all my X listings" / "every X listing" — matches even with words in
+  // between (like "all my VACANT LAND listings" or "every active listing")
+  const allPhrase = /\ball\s+(?:my\s+|the\s+)?(?:[a-z\-]+\s+){0,3}(?:listings|properties)\b/i.test(lowered)
+    || /\bevery\s+(?:[a-z\-]+\s+){0,3}listing\b/i.test(lowered)
+    || /\broundup\b/.test(lowered)
+    || /\bnew\s+listings\s+together\b/.test(lowered)
+    || /\bgroup\s+listing\b/.test(lowered)
+    || /\bmulti[-\s]?listing\b/.test(lowered);
+  if (allPhrase) {
+    const subset = wantsVacantLand ? listings.filter(isVacantLand) : listings.slice();
+    return subset;
   }
 
-  // "a listing" / "one listing" / "any listing" / "pick a listing" — generic
-  // single-listing request with no specific address. Fall back to the first
-  // active listing as a reasonable default.
+  // Standalone vacant-land request (no "all listings" wrapper) — treat as
+  // "all vacant land listings" automatically
+  if (wantsVacantLand) {
+    return listings.filter(isVacantLand);
+  }
+
+  // Generic "one listing" / "a listing" / "any listing"
   if (/\b(a listing|one listing|any listing|pick (a|one) listing|just (one|a) listing|some listing|my listing)\b/.test(lowered)) {
     return [listings[0]];
   }

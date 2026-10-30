@@ -399,15 +399,33 @@ function findMentionedListings(text, listings) {
     if (!l.address) continue;
     const addr = String(l.address).toLowerCase();
     const parts = addr.split(/\s+/).filter(Boolean);
+    // Also build a "normalized" version where house-number suffixes like 518B
+    // or 210A become plain 518/210, so a user typing "518 clark" still
+    // matches "518B Clark Creek Rd".
+    const normalizedParts = parts.map(p => p.replace(/^(\d+)[a-z]+$/i, "$1"));
     let hit = false;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const bigram = `${parts[i]} ${parts[i + 1]}`;
-      if (lowered.includes(bigram)) { hit = true; break; }
+
+    // Try bigrams (original + normalized)
+    for (let i = 0; i < parts.length - 1 && !hit; i++) {
+      const bigrams = [
+        `${parts[i]} ${parts[i + 1]}`,
+        `${normalizedParts[i]} ${normalizedParts[i + 1]}`,
+      ];
+      for (const bg of bigrams) {
+        if (lowered.includes(bg)) { hit = true; break; }
+      }
     }
-    if (!hit && parts[0] && /^\d+$/.test(parts[0])) {
-      const re = new RegExp(`\\b${parts[0]}\\b`);
-      if (re.test(lowered)) hit = true;
+
+    // Fallback: just the leading number (match "518" against "518b clark...")
+    if (!hit && parts[0]) {
+      const leadingNum = parts[0].match(/^(\d+)/);
+      if (leadingNum) {
+        // Match "\b518\b" OR "\b518[a-z]\b" (with suffix like 518B)
+        const re = new RegExp(`\\b${leadingNum[1]}[a-z]?\\b`, "i");
+        if (re.test(lowered)) hit = true;
+      }
     }
+
     if (hit) found.push(l);
   }
   return found;
@@ -547,6 +565,7 @@ async function doChat({ messages, activeListings, uploadedPhoto }) {
         if (l.beds) parts.push(`${l.beds} beds`);
         if (l.baths) parts.push(`${l.baths} baths`);
         if (l.sqft) parts.push(`${Number(l.sqft).toLocaleString()} sqft`);
+        if (l.lotSize) parts.push(`Lot size: ${l.lotSize}`);
         parts.push(`NWMLS printout: ${l.hasNwmls ? "yes" : "no"}`);
         parts.push(`Photos: ${l.photoCount || 0}`);
         if (l.propertyWebsite) parts.push(`Property website: ${l.propertyWebsite}`);
@@ -594,10 +613,19 @@ HOW TO RESPOND:
 - Jesse messages you → You reply with a finished post ready to copy/paste.
 - Start your reply WITH the post itself. No preamble, no "here's your post", no "I'd love to help".
 - Match addresses loosely (so "1745 23rd" matches "1745 23rd Avenue"). Use the matched listing's details.
+- ALWAYS include the home's SPECS when they're in the listing data above. For a residential listing, include a quick specs line (bedrooms, bathrooms, sqft). For VACANT LAND listings (no beds/baths/sqft but has a Lot size value), prominently feature the LOT SIZE instead. Never skip these if they're available.
 - Missing info (price, sqft)? Use [brackets] like [price] or [bedrooms] for Jesse to fill in.
 - Style: ALL-CAPS headline, warm tone, emoji accents, 6-10 Longview/Cowlitz County hashtags.
 - Length: 120-250 words.
-- Team contacts when it fits: Jesse 360-431-5915 / Mercedes 360-355-0646.
+
+CONTACT BLOCK (always include at the end of listing posts, just before the hashtags):
+Format it as a short branded block like this (vary spacing/emojis a bit but keep ALL the details):
+  📞 Jesse Cope — 360-431-5915
+  📧 jessecope@remax.net
+  🏢 RE/MAX Premier Group — 842 Washington Way #150, Longview, WA
+  📧 Team: jrcopesellshomes@gmail.com
+
+For non-listing posts (uploads, testimonials, general content), you may use a shorter version (just Jesse's phone + email) if the full block feels like too much.
 
 For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrite the previous post with those tweaks.`;
 

@@ -704,6 +704,8 @@ function newTransaction(type) {
     address: "", city: "", state: "", zip: "",
     propertyWebsite: "",     // RE/MAX individual property landing page URL
     lotSize: "",             // Free-text lot size (e.g. "5 acres", "0.25 acre lot", "10,890 sqft")
+    beds: "", baths: "", sqft: "",  // Residential specs — shown on branded graphics
+    yearBuilt: "",
     sellerName: "",
     sellerContactsList: [],  // [{ id, role, name, email, phone }]
     buyerName: "",
@@ -7570,6 +7572,7 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
   const [parsing, setParsing] = useState(null); // null | "listing" | "purchase"
   const [parseError, setParseError] = useState("");
   const [parseSuccess, setParseSuccess] = useState("");
+  const [autoFillState, setAutoFillState] = useState({ loading: false, msg: "" });
   const [newMilestoneLabel, setNewMilestoneLabel] = useState("");
   // Track whether the form has been edited so we can warn before losing changes.
   const [isDirty, setIsDirty] = useState(false);
@@ -7730,6 +7733,78 @@ function FormModal({ txn, onClose, onSave, contactDirectory = [] }) {
                        placeholder='e.g. "5 acres", "0.25 acre lot", "10,890 sqft"' />
               </Field>
             )}
+            {form.type === "listing" && (
+              <Field label="Bedrooms">
+                <input type="number" value={form.beds || ""} onChange={(e) => update("beds", e.target.value)}
+                       style={styles.input} placeholder="3" min="0" max="20" />
+              </Field>
+            )}
+            {form.type === "listing" && (
+              <Field label="Bathrooms">
+                <input type="number" value={form.baths || ""} onChange={(e) => update("baths", e.target.value)}
+                       style={styles.input} placeholder="2.5" min="0" max="20" step="0.5" />
+              </Field>
+            )}
+            {form.type === "listing" && (
+              <Field label="Sqft (living area)">
+                <input type="number" value={form.sqft || ""} onChange={(e) => update("sqft", e.target.value)}
+                       style={styles.input} placeholder="1850" min="0" />
+              </Field>
+            )}
+            {form.type === "listing" && (
+              <Field label="Year Built">
+                <input type="number" value={form.yearBuilt || ""} onChange={(e) => update("yearBuilt", e.target.value)}
+                       style={styles.input} placeholder="1995" min="1800" max="2100" />
+              </Field>
+            )}
+            {form.type === "listing" && (() => {
+              const nwmlsDoc = (form.documents || []).find(d => d.section === "nwmls");
+              if (!nwmlsDoc) return null;
+              return (
+                <div style={{ gridColumn: "1 / -1", marginTop: 8 }}>
+                  <button type="button"
+                    onClick={async () => {
+                      if (autoFillState.loading) return;
+                      setAutoFillState({ loading: true, msg: "" });
+                      try {
+                        const res = await fetch("/api/social-generate", {
+                          method: "POST",
+                          headers: { "content-type": "application/json" },
+                          body: JSON.stringify({ mode: "parse_nwmls", txnId: form.id, docId: nwmlsDoc.id }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error || "Parse failed");
+                        const updates = {};
+                        if (data.address) updates.address = data.address;
+                        if (data.city) updates.city = data.city;
+                        if (data.state) updates.state = data.state;
+                        if (data.zip) updates.zip = data.zip;
+                        if (data.beds != null && data.beds !== "") updates.beds = String(data.beds);
+                        if (data.baths != null && data.baths !== "") updates.baths = String(data.baths);
+                        if (data.sqft != null && data.sqft !== "") updates.sqft = String(data.sqft);
+                        if (data.lotSize) updates.lotSize = data.lotSize;
+                        if (data.listPrice != null && data.listPrice !== "") updates.listPrice = String(data.listPrice);
+                        if (data.yearBuilt != null && data.yearBuilt !== "") updates.yearBuilt = String(data.yearBuilt);
+                        setForm(prev => ({ ...prev, ...updates }));
+                        setIsDirty(true);
+                        const filled = Object.keys(updates).join(", ") || "nothing";
+                        setAutoFillState({ loading: false, msg: `Filled: ${filled}. Review and save.` });
+                        setTimeout(() => setAutoFillState({ loading: false, msg: "" }), 6000);
+                      } catch (e) {
+                        setAutoFillState({ loading: false, msg: `Error: ${e.message || e}` });
+                      }
+                    }}
+                    style={{ ...styles.btn, ...styles.btnGhost, padding: "8px 14px", fontSize: 13 }}>
+                    {autoFillState.loading ? "✨ Reading NWMLS…" : "✨ Auto-fill from NWMLS printout"}
+                  </button>
+                  {autoFillState.msg && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: autoFillState.msg.startsWith("Error") ? "var(--accent)" : "var(--ink-soft)", fontStyle: "italic" }}>
+                      {autoFillState.msg}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </FormSection>
 
           {/* Parties */}

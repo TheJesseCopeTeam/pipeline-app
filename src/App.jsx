@@ -9433,7 +9433,7 @@ function renderTestimonialStyle(canvas, payload) {
   ctx.font = `800 32px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("THE JESSE COPE TEAM", textRightEdgeT, footerY + footerH * 0.37);
   ctx.font = `500 24px 'Helvetica Neue', Arial, sans-serif`;
-  ctx.fillText("PREMIER GROUP  •  360-431-5915  •  jessecope@remax.net", textRightEdgeT, footerY + footerH * 0.72);
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdgeT, footerY + footerH * 0.72);
 }
 
 // STYLE — "Instagram Story (9:16)": vertical 1080x1920 variant designed for
@@ -9585,10 +9585,18 @@ function renderUploadedPlainStyle(canvas, payload) {
   ctx.fillStyle = NAVY;
   ctx.fillRect(0, footerY, imgW, footerH);
   const fpadX = Math.round(imgW * 0.025);
+  let pgTextEndX = fpadX;
   if (logoImg && logoImg.naturalWidth > 0) {
     const logoH = Math.round(footerH * 0.55);
     const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
     ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+    // "PREMIER GROUP" text next to the RE/MAX balloon logo
+    const pgFont = Math.round(footerH * 0.19);
+    ctx.font = `800 ${pgFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillStyle = CREAM;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("PREMIER GROUP", fpadX + logoW + 12, footerY + footerH / 2);
+    pgTextEndX = fpadX + logoW + 12 + ctx.measureText("PREMIER GROUP").width;
   }
   const hr = Math.round(footerH * 0.4);
   const hCX = imgW - fpadX - hr;
@@ -9604,7 +9612,7 @@ function renderUploadedPlainStyle(canvas, payload) {
   ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("THE JESSE COPE TEAM", textRightEdge, footerY + footerH * 0.37);
   ctx.font = `500 ${fsFont}px 'Helvetica Neue', Arial, sans-serif`;
-  ctx.fillText("PREMIER GROUP  •  360-431-5915", textRightEdge, footerY + footerH * 0.72);
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdge, footerY + footerH * 0.72);
 }
 
 // Draws a circular, cream-ringed headshot centered at (cx, cy) with the given
@@ -9701,10 +9709,18 @@ function renderCleanStyle(canvas, payload) {
   ctx.fillStyle = NAVY;
   ctx.fillRect(0, footerY, imgW, footerH);
   const fpadX = Math.round(imgW * 0.025);
+  let pgTextEndX = fpadX;
   if (logoImg && logoImg.naturalWidth > 0) {
     const logoH = Math.round(footerH * 0.55);
     const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
     ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+    // "PREMIER GROUP" text next to the RE/MAX balloon logo
+    const pgFont = Math.round(footerH * 0.19);
+    ctx.font = `800 ${pgFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillStyle = CREAM;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("PREMIER GROUP", fpadX + logoW + 12, footerY + footerH / 2);
+    pgTextEndX = fpadX + logoW + 12 + ctx.measureText("PREMIER GROUP").width;
   }
   const hr = Math.round(footerH * 0.4);
   const hCX = imgW - fpadX - hr;
@@ -9720,7 +9736,7 @@ function renderCleanStyle(canvas, payload) {
   ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("THE JESSE COPE TEAM", textRightEdge, footerY + footerH * 0.37);
   ctx.font = `500 ${fsFont}px 'Helvetica Neue', Arial, sans-serif`;
-  ctx.fillText("PREMIER GROUP  •  360-431-5915", textRightEdge, footerY + footerH * 0.72);
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdge, footerY + footerH * 0.72);
 }
 
 // STYLE 2 — "Bold Side Panel": navy panel on the left with headline + price
@@ -9989,10 +10005,18 @@ function renderSplitBannerStyle(canvas, payload) {
   ctx.fillStyle = NAVY;
   ctx.fillRect(0, footerY, imgW, footerH);
   const fpadX = Math.round(imgW * 0.025);
+  let pgTextEndX = fpadX;
   if (logoImg && logoImg.naturalWidth > 0) {
     const logoH = Math.round(footerH * 0.55);
     const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
     ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+    // "PREMIER GROUP" text next to the RE/MAX balloon logo
+    const pgFont = Math.round(footerH * 0.19);
+    ctx.font = `800 ${pgFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillStyle = CREAM;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("PREMIER GROUP", fpadX + logoW + 12, footerY + footerH / 2);
+    pgTextEndX = fpadX + logoW + 12 + ctx.measureText("PREMIER GROUP").width;
   }
   const hr = Math.round(footerH * 0.4);
   const hCX = imgW - fpadX - hr;
@@ -10008,7 +10032,7 @@ function renderSplitBannerStyle(canvas, payload) {
   ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("THE JESSE COPE TEAM", textRightEdge, footerY + footerH * 0.37);
   ctx.font = `500 ${fsFont}px 'Helvetica Neue', Arial, sans-serif`;
-  ctx.fillText("PREMIER GROUP  •  360-431-5915", textRightEdge, footerY + footerH * 0.72);
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdge, footerY + footerH * 0.72);
 }
 
 // STYLE — "Minimal Luxury": editorial / high-end feel. Full photo with a thin
@@ -10369,7 +10393,7 @@ function renderPhotoTourStyle(canvas, payload) {
   ctx.font = `800 32px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("THE JESSE COPE TEAM", textRightEdgePT, footerY + footerH * 0.37);
   ctx.font = `500 24px 'Helvetica Neue', Arial, sans-serif`;
-  ctx.fillText("PREMIER GROUP  •  360-431-5915  •  jessecope@remax.net", textRightEdgePT, footerY + footerH * 0.72);
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdgePT, footerY + footerH * 0.72);
 }
 
 // STYLE 4 — "Multi-Listing Collage": multiple properties in one graphic.
@@ -10422,10 +10446,18 @@ function renderCollageStyle(canvas, payload) {
   ctx.fillStyle = NAVY;
   ctx.fillRect(0, footerY, outW, footerH);
   const fpadX = Math.round(outW * 0.025);
+  let pgTextEndX = fpadX;
   if (logoImg && logoImg.naturalWidth > 0) {
     const logoH = Math.round(footerH * 0.55);
     const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
     ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+    // "PREMIER GROUP" text next to the RE/MAX balloon logo
+    const pgFont = Math.round(footerH * 0.19);
+    ctx.font = `800 ${pgFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillStyle = CREAM;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("PREMIER GROUP", fpadX + logoW + 12, footerY + footerH / 2);
+    pgTextEndX = fpadX + logoW + 12 + ctx.measureText("PREMIER GROUP").width;
   }
   const hrC = Math.round(footerH * 0.4);
   const hCXC = outW - fpadX - hrC;
@@ -10440,7 +10472,7 @@ function renderCollageStyle(canvas, payload) {
   ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("THE JESSE COPE TEAM", textRightEdgeC, footerY + footerH * 0.37);
   ctx.font = `500 ${Math.round(fFont * 0.85)}px 'Helvetica Neue', Arial, sans-serif`;
-  ctx.fillText("PREMIER GROUP  •  360-431-5915", textRightEdgeC, footerY + footerH * 0.72);
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdgeC, footerY + footerH * 0.72);
 
   // ─── COLLAGE AREA ───
   const collageY = headerH + dividerH;
@@ -10548,6 +10580,7 @@ function renderCollageStyle(canvas, payload) {
     if (listing.beds) specs.push(`${listing.beds} BD`);
     if (listing.baths) specs.push(`${listing.baths} BA`);
     if (listing.sqft) specs.push(`${Number(listing.sqft).toLocaleString()} SF`);
+    if (specs.length === 0 && listing.lotSize) specs.push(String(listing.lotSize).toUpperCase());
     if (specs.length > 0) {
       ctx.fillStyle = "rgba(245, 241, 232, 0.85)";
       ctx.font = `600 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
@@ -10702,6 +10735,8 @@ function BrandedOverlayGraphic({ overlay }) {
           if (listing.beds) specParts.push(`${listing.beds} BD`);
           if (listing.baths) specParts.push(`${listing.baths} BA`);
           if (listing.sqft) specParts.push(`${Number(listing.sqft).toLocaleString()} SQFT`);
+          // Vacant land / lot listings: show lot size when there are no beds/baths/sqft
+          if (specParts.length === 0 && listing.lotSize) specParts.push(String(listing.lotSize).toUpperCase());
           const specLine = specParts.join("  •  ");
 
           renderPhotoTourStyle(canvas, {
@@ -10783,6 +10818,8 @@ function BrandedOverlayGraphic({ overlay }) {
           if (listing.beds) specParts.push(`${listing.beds} BD`);
           if (listing.baths) specParts.push(`${listing.baths} BA`);
           if (listing.sqft) specParts.push(`${Number(listing.sqft).toLocaleString()} SQFT`);
+          // Vacant land / lot listings: show lot size when there are no beds/baths/sqft
+          if (specParts.length === 0 && listing.lotSize) specParts.push(String(listing.lotSize).toUpperCase());
           const specLine = specParts.join("  •  ");
 
           const payload = {

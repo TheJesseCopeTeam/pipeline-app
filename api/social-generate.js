@@ -381,12 +381,11 @@ function findMentionedListings(text, listings) {
   if (!text || !Array.isArray(listings) || listings.length === 0) return [];
   const lowered = String(text).toLowerCase();
 
-  // Vacant land filter: more generous — if lotSize is set OR if the listing
-  // has no beds AND no baths (sqft optional). Covers typical land listings
-  // where some data fields are left blank.
+  // Vacant land filter: STRICT — must have Lot Size filled in Pipeline. We
+  // can't rely on empty beds/baths because Jesse often leaves those blank
+  // for residential listings too (he fills them from NWMLS printouts).
   const wantsVacantLand = /\bvacant\s+land\b|\bland\s+listings?\b|\blots?\b|\bacreage\b/.test(lowered);
-  const isVacantLand = (l) =>
-    !!l.lotSize || (!l.beds && !l.baths);
+  const isVacantLand = (l) => !!l.lotSize;
 
   // "all my X listings" — generous match that handles ANY words between
   // "all" and "listings", so phrases like "all my vacant land listings",
@@ -660,7 +659,18 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   // the listing lookup entirely and treat this as a general post.
   const lastUserMsg = [...trimmed].reverse().find(m => m.role === "user");
   const lastText = lastUserMsg?.content || "";
-  const mentioned = parsedUpload ? [] : findMentionedListings(lastText, activeListings);
+  let mentioned = parsedUpload ? [] : findMentionedListings(lastText, activeListings);
+
+  // "limit to N" / "only N photos" / "only N listings" / "just N" / "N listings"
+  // caps the number of listings included in a multi-listing collage. Lets Jesse
+  // iterate: "all my active listings" → gets 6 → replies "only 3" → gets 3.
+  const limitMatch = (lastText || "").match(/\b(?:limit (?:to|at)|only|just|max|maximum|top)\s+(\d{1,2})\b|\b(\d{1,2})\s+(?:photos?|listings?|homes?|properties)\b/i);
+  if (limitMatch && mentioned.length > 1) {
+    const n = parseInt(limitMatch[1] || limitMatch[2], 10);
+    if (n > 0 && n < mentioned.length) {
+      mentioned = mentioned.slice(0, n);
+    }
+  }
   const nwmlsAtt = parsedUpload ? [] : await fetchNwmlsAttachments(mentioned);
   const photoAtt = parsedUpload ? [] : await fetchPhotoAttachments(mentioned);
 

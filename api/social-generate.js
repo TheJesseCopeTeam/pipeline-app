@@ -573,6 +573,68 @@ function parseDataUrl(dataUrl) {
   return { mediaType: m[1], data: m[2] };
 }
 
+// Auto-fill listing specs from an attached NWMLS printout. Fetches the PDF
+// signed URL from Supabase storage, hands it to Claude, and asks for strict
+// JSON with beds/baths/sqft/lotSize/listPrice/address/etc.
+async function doParseNwmls({ txnId, docId }) {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+  if (!serviceRoleKey || !supabaseUrl) throw new Error("Missing Supabase env vars");
+
+  const ownerIds = await getOwnerIdByTxn(serviceRoleKey, supabaseUrl, [txnId]);
+  const ownerId = ownerIds[txnId];
+  if (!ownerId) throw new Error("Could not find transaction owner");
+
+  const url = await signedUrl(serviceRoleKey, supabaseUrl, `${ownerId}/${docId}`);
+  if (!url) throw new Error("Could not generate signed URL for NWMLS printout");
+
+  const prompt = `Extract these fields from the attached NWMLS printout PDF. Return STRICT JSON ONLY (no commentary, no markdown, no code fences):
+{
+  "address": "",
+  "city": "",
+  "state": "",
+  "zip": "",
+  "beds": null,
+  "baths": null,
+  "sqft": null,
+  "lotSize": "",
+  "listPrice": null,
+  "yearBuilt": null
+}
+
+Rules:
+- beds: integer (no decimals) or null if not shown
+- baths: number (can be decimal like 2.5) or null if not shown
+- sqft: integer, no commas, LIVING AREA only (not lot sqft), or null
+- lotSize: free text — if given as acres, format as "X.XX acres"; if sqft, format as "X,XXX sqft lot". Blank string if not shown.
+- listPrice: integer with no $ or commas, or null
+- yearBuilt: integer or null
+- address: street address only (no city/state/zip)
+- state: two-letter code (WA, OR)
+- If a field truly isn't on the printout, use null (or empty string for text fields).
+Return ONLY the JSON object. No prose. No code fences.`;
+
+  const content = [
+    { type: "text", text: prompt },
+    { type: "document", source: { type: "url", url } },
+  ];
+
+  const text = await callClaude({
+    system: "You extract structured data from real estate NWMLS printouts and return ONLY the requested JSON object.",
+    max_tokens: 700,
+    messages: [{ role: "user", content }],
+  });
+
+  const start = (text || "").indexOf("{");
+  const end = (text || "").lastIndexOf("}");
+  if (start < 0 || end < 0) throw new Error("Couldn't find JSON in Claude's response");
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch (e) {
+    throw new Error("Claude returned invalid JSON — try again");
+  }
+}
+
 async function doChat({ messages, activeListings, uploadedPhoto }) {
   // Build a rich listing summary — include ALL the fields Pipeline knows about
   // so Claude has them even when the NWMLS printout isn't attached.
@@ -908,6 +970,13 @@ export default async function handler(req, res) {
 
     if (mode === "chat") {
       const out = await doChat(body);
+      return res.status(200).json(out);
+    }
+    if (mode === "parse_nwmls") {
+      if (!body.txnId || !body.docId) {
+        return res.status(400).json({ error: "txnId and docId required" });
+      }
+      const out = await doParseNwmls(body);
       return res.status(200).json(out);
     }
     if (mode === "random") {

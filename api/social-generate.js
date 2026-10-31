@@ -7,7 +7,6 @@
 //   3. my_listings     — Post from one or more existing listings in the app,
 //                        with files pulled from Supabase Storage.
 //
-
 // Required env vars:
 //   ANTHROPIC_API_KEY
 //   VITE_SUPABASE_URL (or SUPABASE_URL)
@@ -804,6 +803,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       listing: {
         address: m.address || "", city: m.city || "", state: m.state || "",
         beds: m.beds || null, baths: m.baths || null, sqft: m.sqft || null,
+        lotSize: m.lotSize || null,
         listPrice: m.listPrice || null,
       },
       tourPhotos,
@@ -839,6 +839,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
         beds: m.beds || null,
         baths: m.baths || null,
         sqft: m.sqft || null,
+        lotSize: m.lotSize || null,
         listPrice: m.listPrice || null,
       });
     }

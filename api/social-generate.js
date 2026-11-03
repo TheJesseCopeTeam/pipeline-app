@@ -90,12 +90,21 @@ function detectOverlayTemplate(text, listing) {
   if (t.includes("coming soon")) return { template: "COMING_SOON", args };
   // Price-reduction family: match any of these phrasings, including typos
   // like "priced reduced" / "priced drop" by matching the word stems.
+  // Also capture the EXACT phrasing Jesse used so the badge echoes it.
   if (/\bpric(e|ed)\s+(drop|reduce|reduced|reduction)/.test(t) ||
       t.includes("price reduction") || t.includes("price cut") ||
       t.includes("lower price") || t.includes("new price")) {
     const p = extractPrice(text) || (listing && listing.listPrice ? `$${Number(listing.listPrice).toLocaleString()}` : null);
     if (p) args.subtitle = `NOW ${p}`;
-    return { template: "PRICE_DROP", args };
+    // Honor Jesse's exact phrasing: "price reduced" → PRICE REDUCED badge,
+    // "price cut" → PRICE CUT, etc. Default fallback is PRICE DROP.
+    let labelOverride = null;
+    if (/\bpric(e|ed)\s+reduced\b/i.test(t)) labelOverride = "PRICE REDUCED";
+    else if (/\bprice\s+reduction\b/i.test(t)) labelOverride = "PRICE REDUCTION";
+    else if (/\bprice\s+cut\b/i.test(t)) labelOverride = "PRICE CUT";
+    else if (/\blower\s+price\b/i.test(t)) labelOverride = "LOWER PRICE";
+    else if (/\bnew\s+price\b/i.test(t)) labelOverride = "NEW PRICE";
+    return { template: "PRICE_DROP", args, labelOverride };
   }
   if (t.includes("price improvement") || t.includes("priced improvement")) {
     const p = extractPrice(text) || (listing && listing.listPrice ? `$${Number(listing.listPrice).toLocaleString()}` : null);
@@ -635,7 +644,7 @@ Return ONLY the JSON object. No prose. No code fences.`;
   }
 }
 
-async function doChat({ messages, activeListings, uploadedPhoto }) {
+async function doChat({ messages, activeListings, uploadedPhoto, priorListingIds }) {
   // Build a rich listing summary — include ALL the fields Pipeline knows about
   // so Claude has them even when the NWMLS printout isn't attached.
   const listingLines = (activeListings && activeListings.length > 0)
@@ -693,6 +702,8 @@ YOUR JOB: Write the post. Every message. No exceptions.
 HOW TO RESPOND:
 - Jesse messages you → You reply with a finished post ready to copy/paste.
 - Start your reply WITH the post itself. No preamble, no "here's your post", no "I'd love to help".
+- CRITICAL: Use Jesse's exact phrasing. If he says "price reduced", write "PRICE REDUCED" in the headline (not "PRICE DROP" or "PRICE REDUCTION"). If he says "price cut", write "PRICE CUT". Mirror his words.
+- Follow-ups ("change price drop to price reduced", "swap the opening", "make it shorter"): rewrite the previous post with those tweaks. Preserve what he liked, change only what he asked.
 - Match addresses loosely (so "1745 23rd" matches "1745 23rd Avenue"). Use the matched listing's details.
 - ALWAYS include the home's SPECS when they're in the listing data above. For a residential listing, include a quick specs line (bedrooms, bathrooms, sqft). For VACANT LAND listings (no beds/baths/sqft but has a Lot size value), prominently feature the LOT SIZE instead. Never skip these if they're available.
 - Missing info (price, sqft)? Use [brackets] like [price] or [bedrooms] for Jesse to fill in.
@@ -723,9 +734,20 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   const lastText = lastUserMsg?.content || "";
   let mentioned = parsedUpload ? [] : findMentionedListings(lastText, activeListings);
 
+  // Follow-up: if the current message doesn't mention any listings but the
+  // PREVIOUS message's response included an overlay with listings, inherit
+  // those. Lets Jesse iterate ("make it say price reduced", "only 3",
+  // "swap the opening") without having to retype which listings he wants.
+  if (mentioned.length === 0 && Array.isArray(priorListingIds) && priorListingIds.length > 0) {
+    const byId = new Map((activeListings || []).map(l => [l.id, l]));
+    for (const id of priorListingIds) {
+      const l = byId.get(id);
+      if (l) mentioned.push(l);
+    }
+  }
+
   // "limit to N" / "only N photos" / "only N listings" / "just N" / "N listings"
-  // caps the number of listings included in a multi-listing collage. Lets Jesse
-  // iterate: "all my active listings" → gets 6 → replies "only 3" → gets 3.
+  // caps the number of listings included in a multi-listing collage.
   const limitMatch = (lastText || "").match(/\b(?:limit (?:to|at)|only|just|max|maximum|top)\s+(\d{1,2})\b|\b(\d{1,2})\s+(?:photos?|listings?|homes?|properties)\b/i);
   if (limitMatch && mentioned.length > 1) {
     const n = parseInt(limitMatch[1] || limitMatch[2], 10);
@@ -849,7 +871,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   if (parsedUpload) {
     overlay = {
       template: overlayInfo ? overlayInfo.template : null,
-      label: overlayInfo ? templateLabel(overlayInfo.template) : "",
+      label: overlayInfo ? (overlayInfo.labelOverride || templateLabel(overlayInfo.template)) : "",
       subtitle: overlayInfo && overlayInfo.args.subtitle ? overlayInfo.args.subtitle : "",
       sourceUrl: uploadedPhoto,          // data URL — browser can render it directly
       listing: null,
@@ -869,10 +891,11 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     }
     overlay = {
       template: overlayInfo ? overlayInfo.template : "PHOTO_TOUR",
-      label: overlayInfo ? templateLabel(overlayInfo.template) : "PHOTO TOUR",
+      label: overlayInfo ? (overlayInfo.labelOverride || templateLabel(overlayInfo.template)) : "PHOTO TOUR",
       subtitle: badgePrice,
       sourceUrl: tourPhotos[0].url,
       listing: {
+        id: m.id || null,
         address: m.address || "", city: m.city || "", state: m.state || "",
         beds: m.beds || null, baths: m.baths || null, sqft: m.sqft || null,
         lotSize: m.lotSize || null,
@@ -887,7 +910,8 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     // so Jesse always gets a branded graphic for listing posts.
     const effectiveTemplate = overlayInfo ? overlayInfo.template
       : (mentioned.length > 1 ? "NEW_LISTING" : "NEW_LISTING");
-    const effectiveLabel = overlayInfo ? templateLabel(overlayInfo.template)
+    const effectiveLabel = overlayInfo
+      ? (overlayInfo.labelOverride || templateLabel(overlayInfo.template))
       : (mentioned.length > 1 ? "NEW LISTINGS" : "NEW LISTING");
 
     // Group photos by their listingId so we can find each listing's cover
@@ -904,6 +928,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       if (photos.length === 0) continue;
       const coverPhoto = photos.find(p => p.isCover) || photos[0];
       listingsForOverlay.push({
+        id: m.id || null,
         sourceUrl: coverPhoto.url,
         address: m.address || "",
         city: m.city || "",

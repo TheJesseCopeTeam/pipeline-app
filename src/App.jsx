@@ -1906,6 +1906,10 @@ function HomeBase({ transactions, stats, futureListings, futureBuyers, vendors, 
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [weather, setWeather] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
+  // Skip the next cloud-triggered reload when WE were the ones who just
+  // wrote the layout. Prevents the save/reload feedback loop that was
+  // making widget add/remove silently revert.
+  const skipNextCloudLoadRef = useRef(false);
 
   // Load layout. Cloud → from appSettings; local → from localStorage.
   // Either way migrate deprecated to-do widgets and ensure todoReminders exists.
@@ -1921,6 +1925,12 @@ function HomeBase({ transactions, stats, futureListings, futureBuyers, vendors, 
     };
 
     if (isCloud) {
+      // If we just wrote this layout ourselves, skip the echo — the cloud
+      // has what we have, no need to reload.
+      if (skipNextCloudLoadRef.current) {
+        skipNextCloudLoadRef.current = false;
+        return;
+      }
       const cloudLayout = appSettings?.home_layout;
       if (cloudLayout && Array.isArray(cloudLayout) && cloudLayout.length > 0) {
         setLayout(migrate(cloudLayout));
@@ -1940,6 +1950,9 @@ function HomeBase({ transactions, stats, futureListings, futureBuyers, vendors, 
       // Skip the very first auto-save (when layout is still DEFAULT_LAYOUT)
       // so we don't overwrite a synced layout that's still being loaded.
       if (layout !== DEFAULT_LAYOUT && updateSetting) {
+        // Mark that the next appSettings update is our own echo — the load
+        // effect should ignore it and keep our local layout.
+        skipNextCloudLoadRef.current = true;
         updateSetting("home_layout", layout);
       }
     } else {

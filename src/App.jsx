@@ -11200,6 +11200,21 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         coverPhotoId: ((t.documents || []).find(d => d.section === "photo" && d.isCover) || {}).id || null,
       }));
 
+      // Find the most recent assistant message with an overlay, and pass its
+      // listing IDs so follow-ups ("make it say price reduced", "only 3") can
+      // keep working against the same listings without having to re-specify.
+      const lastOverlayMsg = [...messages].reverse().find(m => m.role === "assistant" && m.overlay);
+      const priorListingIds = [];
+      if (lastOverlayMsg && lastOverlayMsg.overlay) {
+        const ol = lastOverlayMsg.overlay;
+        if (Array.isArray(ol.listings)) {
+          for (const l of ol.listings) if (l && l.id) priorListingIds.push(l.id);
+        }
+        if (priorListingIds.length === 0 && ol.listing && ol.listing.id) {
+          priorListingIds.push(ol.listing.id);
+        }
+      }
+
       const res = await fetch("/api/social-generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -11207,8 +11222,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
           mode: "chat",
           messages: nextMessages.map(m => ({ role: m.role, content: m.content })),
           activeListings: listingContext,
-          // Phase F: Jesse's own uploaded photo (data URL) when attached
           uploadedPhoto: photoForSend || undefined,
+          priorListingIds: priorListingIds.length > 0 ? priorListingIds : undefined,
         }),
       });
       const data = await res.json();

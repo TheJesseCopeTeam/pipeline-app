@@ -10706,6 +10706,173 @@ function renderCollageStyle(canvas, payload) {
   }
 }
 
+// STYLE 5 — "Per-Listing Stack": 2 listings side-by-side, each a vertical
+// column with its cover photo on top and 2 smaller photos below. Triggered
+// when Jesse asks for room-specific interior shots ("kitchen", "living room",
+// "bathroom") on a multi-listing post. Photos are contain-fit so the whole
+// house is always visible, and letterbox bars are CREAM.
+// Payload: { listings: [{ coverImg, extraImgs, address, city, state, beds, baths, sqft, lotSize, listPrice }, ...], logoImg, headshotImg, colors, label }
+function renderPerListingStackStyle(canvas, payload) {
+  const { listings, logoImg, headshotImg, colors, label } = payload;
+  const { NAVY, RED, CREAM, WHITE } = colors;
+  const outW = 1200;
+  const outH = 1200;
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d");
+
+  // Navy backdrop (header + footer + gutters)
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, 0, outW, outH);
+
+  // ─── HEADER ───
+  const headerH = Math.round(outH * 0.11);
+  const headlineText = `${label} - 2 HOMES`;
+  ctx.fillStyle = WHITE;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const headlineSize = Math.round(headerH * 0.5);
+  ctx.font = `900 ${headlineSize}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText(headlineText, outW / 2, headerH / 2);
+
+  // Thin red divider
+  const dividerH = Math.max(4, Math.round(outH * 0.007));
+  ctx.fillStyle = RED;
+  ctx.fillRect(0, headerH, outW, dividerH);
+
+  // ─── FOOTER ───
+  const footerH = Math.round(outH * 0.095);
+  const footerY = outH - footerH;
+  ctx.fillStyle = NAVY;
+  ctx.fillRect(0, footerY, outW, footerH);
+  const fpadX = Math.round(outW * 0.025);
+  if (logoImg && logoImg.naturalWidth > 0) {
+    const logoH = Math.round(footerH * 0.55);
+    const logoW = Math.round(logoH * (logoImg.naturalWidth / logoImg.naturalHeight));
+    ctx.drawImage(logoImg, fpadX, footerY + (footerH - logoH) / 2, logoW, logoH);
+    const pgFont = Math.round(footerH * 0.19);
+    ctx.font = `800 ${pgFont}px 'Helvetica Neue', Arial, sans-serif`;
+    ctx.fillStyle = CREAM;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("PREMIER GROUP", fpadX + logoW + 12, footerY + footerH / 2);
+  }
+  const hrS = Math.round(footerH * 0.4);
+  const hCXS = outW - fpadX - hrS;
+  const hCYS = footerY + footerH / 2;
+  drawHeadshotCircle(ctx, headshotImg, hCXS, hCYS, hrS, CREAM);
+  const textRightEdgeS = (headshotImg && headshotImg.naturalWidth > 0)
+    ? hCXS - hrS - Math.round(footerH * 0.15)
+    : outW - fpadX;
+  const fFont = Math.round(footerH * 0.26);
+  ctx.fillStyle = CREAM;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.font = `800 ${fFont}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("THE JESSE COPE TEAM", textRightEdgeS, footerY + footerH * 0.37);
+  ctx.font = `500 ${Math.round(fFont * 0.85)}px 'Helvetica Neue', Arial, sans-serif`;
+  ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdgeS, footerY + footerH * 0.72);
+
+  // ─── CONTENT AREA (2 columns, each = 1 listing) ───
+  const contentY = headerH + dividerH;
+  const contentH = footerY - contentY;
+  const gap = Math.round(outW * 0.015);
+  const outerPad = Math.round(outW * 0.025);
+
+  // Helper: contain-fit an image into (x, y, w, h), CREAM letterbox bars
+  function drawContainFit(img, x, y, w, h) {
+    ctx.fillStyle = CREAM;
+    ctx.fillRect(x, y, w, h);
+    if (!img || !img.naturalWidth) return;
+    const srcRatio = img.naturalWidth / img.naturalHeight;
+    const cellRatio = w / h;
+    let dw, dh, dx, dy;
+    if (srcRatio > cellRatio) {
+      dw = w; dh = w / srcRatio; dx = x; dy = y + (h - dh) / 2;
+    } else {
+      dh = h; dw = h * srcRatio; dx = x + (w - dw) / 2; dy = y;
+    }
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, dx, dy, dw, dh);
+  }
+
+  // Each column width
+  const colW = Math.floor((outW - outerPad * 2 - gap) / 2);
+  const colH = contentH - outerPad * 2;
+
+  // Each column: cover on top (60% of column height), 2 extras in a row below
+  const coverH = Math.round(colH * 0.6);
+  const bottomH = colH - coverH - gap;
+  const bottomCellW = Math.floor((colW - gap) / 2);
+
+  // Caption band at the bottom of the cover: translucent navy with address+specs+price
+  function drawCoverCaption(x, y, w, h, listing) {
+    const addr = (listing.address || "").toString();
+    const addrFont = Math.round(h * 0.07);
+    const specFont = Math.round(h * 0.055);
+    const priceFont = Math.round(h * 0.07);
+    const capH = Math.round(h * 0.26);
+    const capY = y + h - capH;
+    ctx.fillStyle = "rgba(10, 20, 40, 0.85)";
+    ctx.fillRect(x, capY, w, capH);
+
+    // Address
+    ctx.fillStyle = WHITE;
+    ctx.textAlign = "left"; ctx.textBaseline = "top";
+    let af = addrFont;
+    ctx.font = `800 ${af}px 'Helvetica Neue', Arial, sans-serif`;
+    while (ctx.measureText(addr.toUpperCase()).width > w - 24 && af > 16) {
+      af -= 1;
+      ctx.font = `800 ${af}px 'Helvetica Neue', Arial, sans-serif`;
+    }
+    ctx.fillText(addr.toUpperCase(), x + 12, capY + 8);
+
+    // Specs
+    const specs = [];
+    if (listing.beds) specs.push(`${listing.beds} BD`);
+    if (listing.baths) specs.push(`${listing.baths} BA`);
+    if (listing.sqft) specs.push(`${Number(listing.sqft).toLocaleString()} SF`);
+    if (specs.length === 0 && listing.lotSize) specs.push(String(listing.lotSize).toUpperCase());
+    if (specs.length > 0) {
+      ctx.fillStyle = "rgba(245, 241, 232, 0.9)";
+      ctx.font = `600 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
+      ctx.fillText(specs.join("  ·  "), x + 12, capY + af + 12);
+    }
+
+    // Price badge (red, top-right over cover)
+    if (listing.listPrice) {
+      const priceStr = `$${Number(listing.listPrice).toLocaleString()}`;
+      ctx.font = `900 ${priceFont}px 'Helvetica Neue', Arial, sans-serif`;
+      const pW = ctx.measureText(priceStr).width;
+      const pPadX = Math.round(priceFont * 0.6);
+      const pPadY = Math.round(priceFont * 0.35);
+      const bW = pW + pPadX * 2;
+      const bH = priceFont + pPadY * 2;
+      ctx.fillStyle = RED;
+      ctx.fillRect(x + w - bW, y, bW, bH);
+      ctx.fillStyle = WHITE;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(priceStr, x + w - bW / 2, y + bH / 2);
+    }
+  }
+
+  for (let i = 0; i < Math.min(listings.length, 2); i++) {
+    const listing = listings[i];
+    const colX = outerPad + i * (colW + gap);
+    const colY = contentY + outerPad;
+
+    // Cover photo
+    drawContainFit(listing.coverImg, colX, colY, colW, coverH);
+    drawCoverCaption(colX, colY, colW, coverH, listing);
+
+    // 2 extra photos below in a row (letterboxed CREAM)
+    const bottomY = colY + coverH + gap;
+    const extras = listing.extraImgs || [];
+    if (extras[0]) drawContainFit(extras[0], colX, bottomY, bottomCellW, bottomH);
+    else { ctx.fillStyle = CREAM; ctx.fillRect(colX, bottomY, bottomCellW, bottomH); }
+    const rightX = colX + bottomCellW + gap;
+    if (extras[1]) drawContainFit(extras[1], rightX, bottomY, bottomCellW, bottomH);
+    else { ctx.fillStyle = CREAM; ctx.fillRect(rightX, bottomY, bottomCellW, bottomH); }
+  }
+}
+
 function BrandedOverlayGraphic({ overlay }) {
   const canvasRef = useRef(null);
   const [dataUrl, setDataUrl] = useState("");
@@ -10846,6 +11013,40 @@ function BrandedOverlayGraphic({ overlay }) {
             addrLine, specLine,
           });
           styleName = "PHOTO_TOUR";
+        } else
+        // ─── PER-LISTING STACK PATH ───
+        // Triggered when Jesse asks for room-specific interior shots on a
+        // 2-listing post ("kitchen and living room below 1745 23rd..."). Each
+        // listing gets a column with cover + 2 extras.
+        if (overlay.isPerListingStack && Array.isArray(overlay.listings) && overlay.listings.length === 2) {
+          const loadImg = (src) => new Promise((resolve) => {
+            if (!src) return resolve(null);
+            const im = new Image();
+            im.crossOrigin = "anonymous";
+            im.onload = () => resolve(im);
+            im.onerror = () => resolve(null); // graceful: null → CREAM letterbox
+            im.src = src;
+          });
+          const listingsLoaded = await Promise.all(overlay.listings.map(async (l) => {
+            const [coverImg, ...extraImgs] = await Promise.all([
+              loadImg(l.sourceUrl),
+              ...(l.extraPhotos || []).slice(0, 2).map(loadImg),
+            ]);
+            return {
+              coverImg,
+              extraImgs: extraImgs.filter(Boolean),
+              address: l.address, city: l.city, state: l.state,
+              beds: l.beds, baths: l.baths, sqft: l.sqft,
+              lotSize: l.lotSize, listPrice: l.listPrice,
+            };
+          }));
+          if (cancelled) return;
+
+          renderPerListingStackStyle(canvas, {
+            listings: listingsLoaded, logoImg, headshotImg, colors,
+            label: overlay.label || "",
+          });
+          styleName = "PER_LISTING_STACK";
         } else
         // ─── MULTI-LISTING COLLAGE PATH ───
         if (overlay.isMulti && Array.isArray(overlay.listings) && overlay.listings.length > 1) {

@@ -423,13 +423,11 @@ function findMentionedListings(text, listings) {
 
   // Address-based matching: look for parts of each listing's address in the text
   const found = [];
+  const foundIds = new Set();
   for (const l of listings) {
     if (!l.address) continue;
     const addr = String(l.address).toLowerCase();
     const parts = addr.split(/\s+/).filter(Boolean);
-    // Also build a "normalized" version where house-number suffixes like 518B
-    // or 210A become plain 518/210, so a user typing "518 clark" still
-    // matches "518B Clark Creek Rd".
     const normalizedParts = parts.map(p => p.replace(/^(\d+)[a-z]+$/i, "$1"));
     let hit = false;
 
@@ -448,14 +446,28 @@ function findMentionedListings(text, listings) {
     if (!hit && parts[0]) {
       const leadingNum = parts[0].match(/^(\d+)/);
       if (leadingNum) {
-        // Match "\b518\b" OR "\b518[a-z]\b" (with suffix like 518B)
         const re = new RegExp(`\\b${leadingNum[1]}[a-z]?\\b`, "i");
         if (re.test(lowered)) hit = true;
       }
     }
 
-    if (hit) found.push(l);
+    if (hit && !foundIds.has(l.id)) { found.push(l); foundIds.add(l.id); }
   }
+
+  // Extra pass: match ordinal street names like "28th", "23rd", "1st" to the
+  // listing whose address contains that exact ordinal. Handles cases like
+  // user types "28th" and the listing is "256 28th Ave".
+  const ordinalsInText = (lowered.match(/\b\d+(?:st|nd|rd|th)\b/gi) || []);
+  for (const ord of ordinalsInText) {
+    for (const l of listings) {
+      if (!l.address || foundIds.has(l.id)) continue;
+      if (String(l.address).toLowerCase().includes(ord.toLowerCase())) {
+        found.push(l);
+        foundIds.add(l.id);
+      }
+    }
+  }
+
   return found;
 }
 
@@ -644,7 +656,7 @@ Return ONLY the JSON object. No prose. No code fences.`;
   }
 }
 
-async function doChat({ messages, activeListings, uploadedPhoto, priorListingIds }) {
+async function doChat({ messages, activeListings, uploadedPhoto, priorListingIds, priorTemplate, priorLabel }) {
   // Build a rich listing summary — include ALL the fields Pipeline knows about
   // so Claude has them even when the NWMLS printout isn't attached.
   const listingLines = (activeListings && activeListings.length > 0)
@@ -733,6 +745,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
   const lastUserMsg = [...trimmed].reverse().find(m => m.role === "user");
   const lastText = lastUserMsg?.content || "";
   let mentioned = parsedUpload ? [] : findMentionedListings(lastText, activeListings);
+  let inheritedListings = false;
 
   // Follow-up: if the current message doesn't mention any listings but the
   // PREVIOUS message's response included an overlay with listings, inherit
@@ -744,6 +757,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       const l = byId.get(id);
       if (l) mentioned.push(l);
     }
+    if (mentioned.length > 0) inheritedListings = true;
   }
 
   // "limit to N" / "only N photos" / "only N listings" / "just N" / "N listings"
@@ -906,13 +920,23 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     };
   } else if (mentioned.length > 0 && photoAtt.length > 0) {
     // Build an overlay whenever there are listings + photos. If no explicit
-    // trigger word matched, fall back to a generic "NEW LISTING(S)" template
-    // so Jesse always gets a branded graphic for listing posts.
-    const effectiveTemplate = overlayInfo ? overlayInfo.template
-      : (mentioned.length > 1 ? "NEW_LISTING" : "NEW_LISTING");
+    // trigger word matched in THIS message, but we inherited listings from a
+    // previous message AND that previous message had its own overlay
+    // (priorTemplate / priorLabel), reuse that overlay so follow-ups like
+    // "can you add a photo of the kitchen to the bottom" keep the
+    // PRICE REDUCED / SOLD / etc. branding instead of defaulting to NEW LISTING.
+    // Otherwise fall back to a generic "NEW LISTING(S)" template.
+    const canInheritOverlay = !overlayInfo && inheritedListings && priorTemplate;
+    const effectiveTemplate = overlayInfo
+      ? overlayInfo.template
+      : (canInheritOverlay
+          ? priorTemplate
+          : "NEW_LISTING");
     const effectiveLabel = overlayInfo
       ? (overlayInfo.labelOverride || templateLabel(overlayInfo.template))
-      : (mentioned.length > 1 ? "NEW LISTINGS" : "NEW LISTING");
+      : (canInheritOverlay
+          ? (priorLabel || templateLabel(priorTemplate) || (mentioned.length > 1 ? "NEW LISTINGS" : "NEW LISTING"))
+          : (mentioned.length > 1 ? "NEW LISTINGS" : "NEW LISTING"));
 
     // Group photos by their listingId so we can find each listing's cover
     const photosByListing = {};
@@ -978,7 +1002,11 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       photosFetched: photoAtt.length,
       nwmlsFetched: nwmlsAtt.length,
       overlayTemplate: overlay ? overlay.template : null,
+      overlayLabel: overlay ? overlay.label : null,
       overlayBuilt: !!overlay,
+      inheritedListings,
+      priorTemplate: priorTemplate || null,
+      priorLabel: priorLabel || null,
     },
   };
 }

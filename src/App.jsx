@@ -10777,9 +10777,10 @@ function renderPerListingStackStyle(canvas, payload) {
   const gap = Math.round(outW * 0.015);
   const outerPad = Math.round(outW * 0.025);
 
-  // Helper: contain-fit an image into (x, y, w, h), CREAM letterbox bars
+  // Helper: contain-fit an image into (x, y, w, h), NAVY letterbox bars so
+  // any blank space blends into the post's navy background.
   function drawContainFit(img, x, y, w, h) {
-    ctx.fillStyle = CREAM;
+    ctx.fillStyle = NAVY;
     ctx.fillRect(x, y, w, h);
     if (!img || !img.naturalWidth) return;
     const srcRatio = img.naturalWidth / img.naturalHeight;
@@ -10793,12 +10794,35 @@ function renderPerListingStackStyle(canvas, payload) {
     ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, dx, dy, dw, dh);
   }
 
+  // Helper: cover-crop an image into (x, y, w, h). Used for interior shots
+  // where losing a little off the sides or top/bottom is fine and filling
+  // the cell cleanly matters more than seeing the whole frame.
+  function drawCoverCrop(img, x, y, w, h) {
+    ctx.fillStyle = NAVY;
+    ctx.fillRect(x, y, w, h);
+    if (!img || !img.naturalWidth) return;
+    const srcRatio = img.naturalWidth / img.naturalHeight;
+    const cellRatio = w / h;
+    let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+    if (srcRatio > cellRatio) {
+      sw = img.naturalHeight * cellRatio;
+      sx = (img.naturalWidth - sw) / 2;
+    } else {
+      sh = img.naturalWidth / cellRatio;
+      sy = (img.naturalHeight - sh) / 2;
+    }
+    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  }
+
   // Each column width
   const colW = Math.floor((outW - outerPad * 2 - gap) / 2);
   const colH = contentH - outerPad * 2;
 
-  // Each column: cover on top (60% of column height), 2 extras in a row below
-  const coverH = Math.round(colH * 0.6);
+  // Each column: cover on top at 3:2 ratio (matches standard real-estate
+  // photo ratio exactly, so there's no visible letterbox for a normal
+  // landscape shot). The 2 extras take the remaining column height split
+  // in half. Interior shots cover-crop in whatever cell they land in.
+  const coverH = Math.min(Math.round(colW / 1.5), Math.round(colH * 0.55));
   const bottomH = colH - coverH - gap;
   const bottomCellW = Math.floor((colW - gap) / 2);
 
@@ -10862,14 +10886,15 @@ function renderPerListingStackStyle(canvas, payload) {
     drawContainFit(listing.coverImg, colX, colY, colW, coverH);
     drawCoverCaption(colX, colY, colW, coverH, listing);
 
-    // 2 extra photos below in a row (letterboxed CREAM)
+    // 2 extra photos below in a row. Interior shots cover-crop cleanly —
+    // losing a little off the sides is fine for a kitchen or bathroom.
     const bottomY = colY + coverH + gap;
     const extras = listing.extraImgs || [];
-    if (extras[0]) drawContainFit(extras[0], colX, bottomY, bottomCellW, bottomH);
-    else { ctx.fillStyle = CREAM; ctx.fillRect(colX, bottomY, bottomCellW, bottomH); }
+    if (extras[0]) drawCoverCrop(extras[0], colX, bottomY, bottomCellW, bottomH);
+    else { ctx.fillStyle = NAVY; ctx.fillRect(colX, bottomY, bottomCellW, bottomH); }
     const rightX = colX + bottomCellW + gap;
-    if (extras[1]) drawContainFit(extras[1], rightX, bottomY, bottomCellW, bottomH);
-    else { ctx.fillStyle = CREAM; ctx.fillRect(rightX, bottomY, bottomCellW, bottomH); }
+    if (extras[1]) drawCoverCrop(extras[1], rightX, bottomY, bottomCellW, bottomH);
+    else { ctx.fillStyle = NAVY; ctx.fillRect(rightX, bottomY, bottomCellW, bottomH); }
   }
 }
 

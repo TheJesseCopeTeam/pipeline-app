@@ -10440,23 +10440,35 @@ function renderPhotoTourStyle(canvas, payload) {
     }
   }
 
-  // Draw photos cover-cropped into each cell
+  // Draw photos CONTAIN-fit into each cell so the whole house is visible.
+  // Real-estate shots are usually ~3:2 landscape; cover-cropping into
+  // square or vertical cells was chopping the roof off or cutting the
+  // house in half. Contain-fit scales each photo down proportionally so
+  // nothing is cropped — any leftover space in the cell is filled with
+  // CREAM so the letterbox bars blend into the brand palette.
   for (let i = 0; i < Math.min(n, cells.length); i++) {
     const img = imgs[i];
     const cell = cells[i];
+    // Fill the cell with CREAM first so letterbox bars look intentional
+    ctx.fillStyle = CREAM;
+    ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
     const srcRatio = img.naturalWidth / img.naturalHeight;
     const cellRatio = cell.w / cell.h;
-    let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+    let dw, dh, dx, dy;
     if (srcRatio > cellRatio) {
-      // Source wider → crop sides
-      sw = img.naturalHeight * cellRatio;
-      sx = (img.naturalWidth - sw) / 2;
+      // Source wider than cell → fit width, letterbox top+bottom
+      dw = cell.w;
+      dh = cell.w / srcRatio;
+      dx = cell.x;
+      dy = cell.y + (cell.h - dh) / 2;
     } else {
-      // Source taller → crop top/bottom
-      sh = img.naturalWidth / cellRatio;
-      sy = (img.naturalHeight - sh) / 2;
+      // Source taller than cell → fit height, letterbox sides
+      dh = cell.h;
+      dw = cell.h * srcRatio;
+      dx = cell.x + (cell.w - dw) / 2;
+      dy = cell.y;
     }
-    ctx.drawImage(img, sx, sy, sw, sh, cell.x, cell.y, cell.w, cell.h);
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, dx, dy, dw, dh);
   }
 
   // ─── Navy footer ───

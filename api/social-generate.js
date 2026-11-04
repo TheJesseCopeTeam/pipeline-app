@@ -945,15 +945,31 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       photosByListing[p.listingId].push(p);
     }
 
+    // Per-listing-stack intent detection. If Jesse asks for room-specific
+    // interior shots ("kitchen", "living room", "bathroom", etc.) AND we
+    // have 2 listings in context, build the stacked layout instead of the
+    // flat collage. Each listing becomes a vertical column: cover photo on
+    // top + 2 smaller photos below. Also triggered by explicit "below each"
+    // / "under each" / "bottom of each" phrasing.
+    const roomKeywordRE = /\b(kitchen|living\s*room|bathroom|master\s*bath|bedroom|master\s*bedroom|dining\s*room|den|office|yard|backyard|exterior|interior|garage|basement|deck|patio|driveway|front\s*(yard|porch))\b/i;
+    const stackPhraseRE = /\b(below|beneath|underneath|under|bottom\s+of)\s+(each|both|every|the)|per\s+listing|for\s+each\s+(listing|home|property)/i;
+    const perListingStackIntent = (mentioned.length === 2)
+      && (roomKeywordRE.test(lastText) || stackPhraseRE.test(lastText));
+
     // Build the per-listing array (preserve the order mentioned appeared in)
     const listingsForOverlay = [];
     for (const m of mentioned) {
       const photos = photosByListing[m.id] || [];
       if (photos.length === 0) continue;
       const coverPhoto = photos.find(p => p.isCover) || photos[0];
+      // For the stack layout, also attach up to 2 non-cover photos per listing.
+      // Upload order determines which rooms show — Jesse controls that by the
+      // order he uploads photos (cover first, then interior shots).
+      const extras = photos.filter(p => p !== coverPhoto).slice(0, 2);
       listingsForOverlay.push({
         id: m.id || null,
         sourceUrl: coverPhoto.url,
+        extraPhotos: extras.map(p => p.url),
         address: m.address || "",
         city: m.city || "",
         state: m.state || "",
@@ -973,6 +989,12 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       }
 
       const isMulti = listingsForOverlay.length > 1;
+      // Only trigger stacked layout when BOTH listings have at least 2 photos
+      // (cover + at least 1 extra). Otherwise fall back to flat collage so a
+      // listing with just a cover doesn't look empty under it.
+      const bothHaveExtras = listingsForOverlay.length === 2
+        && listingsForOverlay.every(l => (l.extraPhotos || []).length >= 1);
+      const useStack = perListingStackIntent && bothHaveExtras;
 
       overlay = {
         template: effectiveTemplate,
@@ -982,6 +1004,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
         listing: listingsForOverlay[0],
         listings: listingsForOverlay,
         isMulti,
+        isPerListingStack: useStack,
       };
     }
   }
@@ -1007,6 +1030,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       inheritedListings,
       priorTemplate: priorTemplate || null,
       priorLabel: priorLabel || null,
+      isPerListingStack: overlay ? !!overlay.isPerListingStack : false,
     },
   };
 }

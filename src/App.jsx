@@ -11214,10 +11214,15 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
       }));
 
       // Find the most recent assistant message with an overlay, and pass its
-      // listing IDs so follow-ups ("make it say price reduced", "only 3") can
-      // keep working against the same listings without having to re-specify.
+      // listing IDs AND its template/label so follow-ups ("add kitchen photo",
+      // "only 3", "swap the opening") can keep working against the same
+      // listings AND keep the same PRICE REDUCED / SOLD / etc. branding
+      // instead of defaulting back to NEW LISTING when the follow-up has no
+      // trigger word.
       const lastOverlayMsg = [...messages].reverse().find(m => m.role === "assistant" && m.overlay);
       const priorListingIds = [];
+      let priorTemplate;
+      let priorLabel;
       if (lastOverlayMsg && lastOverlayMsg.overlay) {
         const ol = lastOverlayMsg.overlay;
         if (Array.isArray(ol.listings)) {
@@ -11226,6 +11231,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
         if (priorListingIds.length === 0 && ol.listing && ol.listing.id) {
           priorListingIds.push(ol.listing.id);
         }
+        if (ol.template) priorTemplate = ol.template;
+        if (ol.label) priorLabel = ol.label;
       }
 
       const res = await fetch("/api/social-generate", {
@@ -11237,6 +11244,8 @@ function SocialMediaTab({ transactions = [], isCloud = false }) {
           activeListings: listingContext,
           uploadedPhoto: photoForSend || undefined,
           priorListingIds: priorListingIds.length > 0 ? priorListingIds : undefined,
+          priorTemplate,
+          priorLabel,
         }),
       });
       const data = await res.json();

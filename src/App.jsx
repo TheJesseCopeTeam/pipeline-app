@@ -4169,7 +4169,9 @@ function newFutureListing() {
     address: "", city: "", state: "WA", zip: "",
     ownerName: "", ownerPhone: "", ownerEmail: "",
     referredBy: "",
-    estimatedPrice: "",
+    estimatedPrice: "",      // single estimate (back-compat)
+    estimatedPriceLow: "",   // range low end (optional)
+    estimatedPriceHigh: "",  // range high end (optional)
     targetListDate: "",
     // Property details — all optional. Strings to allow blank vs 0.
     parcelNumber: "",
@@ -4266,11 +4268,20 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
           phone: item.ownerPhone || "",
         }]
       : [];
+    // If Jesse entered a price range, seed the real listing with the midpoint
+    // of that range; otherwise use the single estimate. Jesse can always
+    // change the final list price on the transaction itself.
+    let listPrice = item.estimatedPrice;
+    const lo = Number(item.estimatedPriceLow);
+    const hi = Number(item.estimatedPriceHigh);
+    if (lo > 0 && hi > 0) listPrice = String(Math.round((lo + hi) / 2));
+    else if (lo > 0) listPrice = String(lo);
+    else if (hi > 0) listPrice = String(hi);
     onConvertToListing({
       address: item.address, city: item.city, state: item.state, zip: item.zip,
       sellerName: item.ownerName,
       sellerContactsList,
-      listPrice: item.estimatedPrice,
+      listPrice,
       notes: combinedNotes,
       prelistChecklist: item.prelistChecklist || [],
     });
@@ -4348,10 +4359,14 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
                 <span style={{ color: "var(--ink-soft)" }}>Owner</span>
                 <span style={{ fontWeight: 500 }}>{item.ownerName || "—"}</span>
               </div>
-              {item.estimatedPrice && (
+              {(item.estimatedPriceLow || item.estimatedPriceHigh || item.estimatedPrice) && (
                 <div style={styles.cardRow}>
                   <span style={{ color: "var(--ink-soft)" }}>Est. Price</span>
-                  <span style={{ fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(item.estimatedPrice)}</span>
+                  <span style={{ fontWeight: 500, fontVariantNumeric: "tabular-nums" }}>
+                    {(item.estimatedPriceLow && item.estimatedPriceHigh)
+                      ? `${fmtMoney(item.estimatedPriceLow)} – ${fmtMoney(item.estimatedPriceHigh)}`
+                      : fmtMoney(item.estimatedPriceLow || item.estimatedPriceHigh || item.estimatedPrice)}
+                  </span>
                 </div>
               )}
               {item.targetListDate && (
@@ -4385,7 +4400,12 @@ function FutureListings({ onConvertToListing, cloudItems, onCloudSave, onCloudRe
 }
 
 function FutureListingModal({ item, onClose, onSave, onRemove, onConvert, isNew }) {
-  const [form, setForm] = useState(item);
+  // If the record has a low/high from an earlier save, open directly in range
+  // mode so Jesse doesn't have to re-check the box to see his values.
+  const [form, setForm] = useState({
+    ...item,
+    priceIsRange: !!(item.priceIsRange || item.estimatedPriceLow || item.estimatedPriceHigh),
+  });
   const update = (field, value) => setForm({ ...form, [field]: value });
   return (
     <div style={styles.modalBackdrop} onClick={onClose}>
@@ -4407,8 +4427,41 @@ function FutureListingModal({ item, onClose, onSave, onRemove, onConvert, isNew 
             <Field label="City"><input type="text" value={form.city} onChange={(e) => update("city", e.target.value)} style={styles.input} /></Field>
             <Field label="State"><input type="text" value={form.state} onChange={(e) => update("state", e.target.value)} style={styles.input} maxLength={2} /></Field>
             <Field label="ZIP"><input type="text" value={form.zip} onChange={(e) => update("zip", e.target.value)} style={styles.input} /></Field>
-            <Field label="Estimated List Price">
-              <input type="number" value={form.estimatedPrice} onChange={(e) => update("estimatedPrice", e.target.value)} style={styles.input} placeholder="500000" />
+            <Field label={form.priceIsRange ? "Estimated Price Range" : "Estimated List Price"} full>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--ink-soft)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!form.priceIsRange}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      if (on) {
+                        // Switching to range: seed low with the single estimate
+                        setForm({ ...form, priceIsRange: true, estimatedPriceLow: form.estimatedPriceLow || form.estimatedPrice || "" });
+                      } else {
+                        // Switching back to single: seed single with low or midpoint
+                        const lo = Number(form.estimatedPriceLow);
+                        const hi = Number(form.estimatedPriceHigh);
+                        let single = form.estimatedPrice;
+                        if (lo > 0 && hi > 0) single = String(Math.round((lo + hi) / 2));
+                        else if (lo > 0) single = String(lo);
+                        else if (hi > 0) single = String(hi);
+                        setForm({ ...form, priceIsRange: false, estimatedPrice: single });
+                      }
+                    }}
+                  />
+                  Use a price range
+                </label>
+              </div>
+              {form.priceIsRange ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="number" value={form.estimatedPriceLow} onChange={(e) => update("estimatedPriceLow", e.target.value)} style={styles.input} placeholder="Low  (e.g. 475000)" />
+                  <span style={{ color: "var(--ink-soft)" }}>–</span>
+                  <input type="number" value={form.estimatedPriceHigh} onChange={(e) => update("estimatedPriceHigh", e.target.value)} style={styles.input} placeholder="High (e.g. 525000)" />
+                </div>
+              ) : (
+                <input type="number" value={form.estimatedPrice} onChange={(e) => update("estimatedPrice", e.target.value)} style={styles.input} placeholder="500000" />
+              )}
             </Field>
             <Field label="Target List Date">
               <input type="date" value={form.targetListDate} onChange={(e) => update("targetListDate", e.target.value)} style={styles.input} />
@@ -10913,12 +10966,28 @@ function BrandedOverlayGraphic({ overlay }) {
   // Default to the first 4 (cover + 3 others) to keep the initial tour clean.
   const [tourSelectedUrls, setTourSelectedUrls] = useState(null);
 
+  // Per-listing-stack picker: stackPicks[listingIndex] is an array of up to 2
+  // photo URLs that fill the bottom two slots of that listing's column. null
+  // when the overlay isn't a stack layout.
+  const [stackPicks, setStackPicks] = useState(null);
+
   // When overlay changes, reset the tour selection to the first 4 photos.
   useEffect(() => {
     if (overlay && overlay.isTour && Array.isArray(overlay.tourPhotos)) {
       setTourSelectedUrls(new Set(overlay.tourPhotos.slice(0, 4).map(p => p.url)));
     } else {
       setTourSelectedUrls(null);
+    }
+  }, [overlay]);
+
+  // When overlay changes AND it's a per-listing-stack, seed the picker with
+  // the backend's default (first 2 non-cover photos per listing).
+  useEffect(() => {
+    if (overlay && overlay.isPerListingStack && Array.isArray(overlay.listings)) {
+      const initial = overlay.listings.map(l => (l.extraPhotos || []).slice(0, 2));
+      setStackPicks(initial);
+    } else {
+      setStackPicks(null);
     }
   }, [overlay]);
 
@@ -10936,6 +11005,34 @@ function BrandedOverlayGraphic({ overlay }) {
       }
       return next;
     });
+  }
+
+  // Tap a thumbnail for listing lIdx:
+  //   - already in the slots → remove it
+  //   - not yet picked, a slot is open → add it
+  //   - not yet picked, both slots full → rotate (drop first, append)
+  function toggleStackPick(lIdx, url) {
+    setStackPicks(prev => {
+      if (!prev) return prev;
+      const next = prev.map(a => [...a]);
+      const slot = next[lIdx] || [];
+      const idx = slot.indexOf(url);
+      if (idx >= 0) {
+        slot.splice(idx, 1);
+      } else if (slot.length < 2) {
+        slot.push(url);
+      } else {
+        slot.shift();
+        slot.push(url);
+      }
+      next[lIdx] = slot;
+      return next;
+    });
+  }
+
+  function resetStackPicks() {
+    if (!overlay || !overlay.isPerListingStack || !Array.isArray(overlay.listings)) return;
+    setStackPicks(overlay.listings.map(l => (l.extraPhotos || []).slice(0, 2)));
   }
 
   useEffect(() => {
@@ -11052,10 +11149,13 @@ function BrandedOverlayGraphic({ overlay }) {
             im.onerror = () => resolve(null); // graceful: null → CREAM letterbox
             im.src = src;
           });
-          const listingsLoaded = await Promise.all(overlay.listings.map(async (l) => {
+          const listingsLoaded = await Promise.all(overlay.listings.map(async (l, lIdx) => {
+            // Picker overrides backend defaults when the user has changed
+            // the slots. Falls back to overlay.extraPhotos on first render.
+            const picked = (stackPicks && stackPicks[lIdx]) || l.extraPhotos || [];
             const [coverImg, ...extraImgs] = await Promise.all([
               loadImg(l.sourceUrl),
-              ...(l.extraPhotos || []).slice(0, 2).map(loadImg),
+              ...picked.slice(0, 2).map(loadImg),
             ]);
             return {
               coverImg,
@@ -11188,7 +11288,7 @@ function BrandedOverlayGraphic({ overlay }) {
 
     render();
     return () => { cancelled = true; };
-  }, [overlay, renderNonce, tourSelectedUrls]);
+  }, [overlay, renderNonce, tourSelectedUrls, stackPicks]);
 
   if (!overlay) return null;
 
@@ -11206,13 +11306,15 @@ function BrandedOverlayGraphic({ overlay }) {
     FILM_STRIP: "Film Strip",
     COLLAGE: "Multi-Listing Collage",
     PHOTO_TOUR: "Photo Tour",
+    PER_LISTING_STACK: "Per-Listing Stack",
     UPLOADED_PLAIN: "Branded Photo",
     TESTIMONIAL: "Client Testimonial",
   };
   // "Try another style" doesn't apply to collages, photo tours, testimonials,
   // or label-free uploads (each has only one layout).
   const canReroll = styleUsed !== "COLLAGE" && styleUsed !== "PHOTO_TOUR"
-    && styleUsed !== "UPLOADED_PLAIN" && styleUsed !== "TESTIMONIAL";
+    && styleUsed !== "UPLOADED_PLAIN" && styleUsed !== "TESTIMONIAL"
+    && styleUsed !== "PER_LISTING_STACK";
 
   return (
     <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
@@ -11256,6 +11358,76 @@ function BrandedOverlayGraphic({ overlay }) {
               ↻ Try another style
             </button>
           )}
+        </div>
+      )}
+      {overlay.isPerListingStack && Array.isArray(overlay.listings) && overlay.listings.length === 2 && stackPicks && (
+        <div style={{ marginTop: 12, padding: "10px 12px", background: "#FBF9F4", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: C.taupe, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+              Pick which 2 photos go under each listing
+            </div>
+            <button
+              onClick={resetStackPicks}
+              style={{ padding: "4px 10px", background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, color: C.taupe, fontSize: 11, cursor: "pointer" }}
+              title="Reset to upload-order default">
+              ↺ Reset
+            </button>
+          </div>
+          {overlay.listings.map((l, lIdx) => {
+            const picks = stackPicks[lIdx] || [];
+            const available = (l.allPhotos && l.allPhotos.length > 0)
+              ? l.allPhotos
+              : (l.extraPhotos || []);
+            return (
+              <div key={l.id || lIdx} style={{ marginBottom: lIdx === 0 ? 14 : 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", marginBottom: 6 }}>
+                  {l.address || `Listing ${lIdx + 1}`}
+                  <span style={{ fontWeight: 400, color: C.taupe, marginLeft: 8 }}>
+                    — {picks.length} of 2 picked
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {available.length === 0 && (
+                    <div style={{ fontSize: 11, color: C.taupe, fontStyle: "italic" }}>
+                      No non-cover photos uploaded for this listing.
+                    </div>
+                  )}
+                  {available.map((url, pIdx) => {
+                    const slotIdx = picks.indexOf(url);
+                    const isPicked = slotIdx >= 0;
+                    return (
+                      <button
+                        key={url}
+                        onClick={() => toggleStackPick(lIdx, url)}
+                        style={{
+                          position: "relative", width: 68, height: 68,
+                          borderRadius: 6, overflow: "hidden",
+                          border: isPicked ? `3px solid ${C.red}` : `2px solid ${C.line}`,
+                          padding: 0, cursor: "pointer", background: "transparent",
+                          opacity: isPicked ? 1 : 0.6,
+                        }}
+                        title={isPicked ? `In slot ${slotIdx + 1} — tap to remove` : "Tap to use this photo"}>
+                        <img src={url} alt={`photo ${pIdx + 1}`}
+                             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        {isPicked && (
+                          <div style={{
+                            position: "absolute", top: 2, right: 2,
+                            width: 20, height: 20, borderRadius: "50%",
+                            background: C.red, color: "#fff", fontSize: 11, fontWeight: 700,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                          }}>{slotIdx + 1}</div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 11, color: C.taupe, marginTop: 10, fontStyle: "italic" }}>
+            Slot 1 = bottom-left photo under the cover. Slot 2 = bottom-right. Tap a thumbnail to pick, tap again to remove. The post rebuilds automatically.
+          </div>
         </div>
       )}
       {overlay.isTour && Array.isArray(overlay.tourPhotos) && overlay.tourPhotos.length >= 2 && tourSelectedUrls && (

@@ -945,16 +945,12 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       photosByListing[p.listingId].push(p);
     }
 
-    // Per-listing-stack intent detection. If Jesse asks for room-specific
-    // interior shots ("kitchen", "living room", "bathroom", etc.) AND we
-    // have 2 listings in context, build the stacked layout instead of the
-    // flat collage. Each listing becomes a vertical column: cover photo on
-    // top + 2 smaller photos below. Also triggered by explicit "below each"
-    // / "under each" / "bottom of each" phrasing.
-    const roomKeywordRE = /\b(kitchen|living\s*room|bathroom|master\s*bath|bedroom|master\s*bedroom|dining\s*room|den|office|yard|backyard|exterior|interior|garage|basement|deck|patio|driveway|front\s*(yard|porch))\b/i;
-    const stackPhraseRE = /\b(below|beneath|underneath|under|bottom\s+of)\s+(each|both|every|the)|per\s+listing|for\s+each\s+(listing|home|property)/i;
-    const perListingStackIntent = (mentioned.length === 2)
-      && (roomKeywordRE.test(lastText) || stackPhraseRE.test(lastText));
+    // Per-listing-stack layout is DISABLED. It couldn't be made to look good
+    // at a reasonable size — either photos were tiny with excessive navy
+    // padding, or the houses got cropped by center-crop. Follow-ups with
+    // room keywords ("kitchen", "living room") now fall back to the regular
+    // 2-home flat collage, which Jesse was happy with.
+    const perListingStackIntent = false;
 
     // Build the per-listing array (preserve the order mentioned appeared in)
     const listingsForOverlay = [];

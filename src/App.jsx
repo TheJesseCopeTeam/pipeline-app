@@ -10871,13 +10871,16 @@ function renderPerListingStackStyle(canvas, payload) {
   const colW = Math.floor((outW - outerPad * 2 - gap) / 2);
   const colH = contentH - outerPad * 2;
 
-  // Each column: cover on top at 3:2 ratio (matches standard real-estate
-  // photo ratio exactly, so there's no visible letterbox for a normal
-  // landscape shot). The 2 extras take the remaining column height split
-  // in half. Interior shots cover-crop in whatever cell they land in.
-  const coverH = Math.min(Math.round(colW / 1.5), Math.round(colH * 0.55));
-  const bottomH = colH - coverH - gap;
+  // Match EVERY cell to the photo aspect ratio (3:2 landscape) so no part
+  // of a house gets cut off. Cover takes the full column width; bottom
+  // cells are half-column width. Vertical remainder becomes navy padding
+  // centered around the content block — same navy-panel feel as the "Just
+  // Listed - 156 Williams Ave" style post.
   const bottomCellW = Math.floor((colW - gap) / 2);
+  const bottomH = Math.round(bottomCellW / 1.5); // 3:2 ratio match
+  const coverH = Math.round(colW / 1.5);          // 3:2 ratio match
+  const contentBlockH = coverH + gap + bottomH;
+  const colVOffset = Math.max(0, Math.round((colH - contentBlockH) / 2));
 
   // Caption band at the bottom of the cover: translucent navy with address+specs+price
   function drawCoverCaption(x, y, w, h, listing) {
@@ -10933,7 +10936,7 @@ function renderPerListingStackStyle(canvas, payload) {
   for (let i = 0; i < Math.min(listings.length, 2); i++) {
     const listing = listings[i];
     const colX = outerPad + i * (colW + gap);
-    const colY = contentY + outerPad;
+    const colY = contentY + outerPad + colVOffset;
 
     // Cover photo
     drawContainFit(listing.coverImg, colX, colY, colW, coverH);

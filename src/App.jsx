@@ -10636,11 +10636,17 @@ function renderCollageStyle(canvas, payload) {
   // Decide grid layout
   let cells;
   if (n === 2) {
+    // Shape the 2-up cells to match real-estate photos (3:2 landscape) so
+    // cover-crop doesn't slice houses in half. Vertical remainder becomes
+    // centered navy padding — same navy-panel look as the branded posts.
     const cellW = Math.floor((outW - outerPad * 2 - gap) / 2);
-    const cellH = collageH - outerPad * 2;
+    const idealH = Math.round(cellW / 1.5); // 3:2
+    const availH = collageH - outerPad * 2;
+    const cellH = Math.min(idealH, availH);
+    const yOffset = Math.max(0, Math.round((availH - cellH) / 2));
     cells = [
-      { x: outerPad, y: collageY + outerPad, w: cellW, h: cellH, i: 0 },
-      { x: outerPad + cellW + gap, y: collageY + outerPad, w: cellW, h: cellH, i: 1 },
+      { x: outerPad, y: collageY + outerPad + yOffset, w: cellW, h: cellH, i: 0 },
+      { x: outerPad + cellW + gap, y: collageY + outerPad + yOffset, w: cellW, h: cellH, i: 1 },
     ];
   } else if (n === 3) {
     const bigW = Math.floor((outW - outerPad * 2 - gap) * 0.56);
@@ -10824,32 +10830,18 @@ function renderPerListingStackStyle(canvas, payload) {
   ctx.font = `500 ${Math.round(fFont * 0.85)}px 'Helvetica Neue', Arial, sans-serif`;
   ctx.fillText("jessecope@remax.net  •  360-431-5915", textRightEdgeS, footerY + footerH * 0.72);
 
-  // ─── CONTENT AREA (2 columns, each = 1 listing) ───
+  // ─── CONTENT AREA ───
+  // 2x3 grid: 2 columns (one per listing), 3 rows (cover + 2 interior shots).
+  // Each cell is sized LANDSCAPE (~1.9:1 — slightly wider than a 3:2 photo),
+  // so cover-crop trims a little off top and bottom (sky and foreground) and
+  // KEEPS the full width of every photo. Houses never get cut off at the
+  // sides. Photos fill their cells completely — no letterbox, no uneven
+  // padding, no tiny photos in an ocean of navy.
   const contentY = headerH + dividerH;
   const contentH = footerY - contentY;
-  const gap = Math.round(outW * 0.015);
-  const outerPad = Math.round(outW * 0.025);
+  const gap = Math.round(outW * 0.012);
+  const outerPad = Math.round(outW * 0.02);
 
-  // Helper: contain-fit an image into (x, y, w, h), NAVY letterbox bars so
-  // any blank space blends into the post's navy background.
-  function drawContainFit(img, x, y, w, h) {
-    ctx.fillStyle = NAVY;
-    ctx.fillRect(x, y, w, h);
-    if (!img || !img.naturalWidth) return;
-    const srcRatio = img.naturalWidth / img.naturalHeight;
-    const cellRatio = w / h;
-    let dw, dh, dx, dy;
-    if (srcRatio > cellRatio) {
-      dw = w; dh = w / srcRatio; dx = x; dy = y + (h - dh) / 2;
-    } else {
-      dh = h; dw = h * srcRatio; dx = x + (w - dw) / 2; dy = y;
-    }
-    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, dx, dy, dw, dh);
-  }
-
-  // Helper: cover-crop an image into (x, y, w, h). Used for interior shots
-  // where losing a little off the sides or top/bottom is fine and filling
-  // the cell cleanly matters more than seeing the whole frame.
   function drawCoverCrop(img, x, y, w, h) {
     ctx.fillStyle = NAVY;
     ctx.fillRect(x, y, w, h);
@@ -10867,56 +10859,54 @@ function renderPerListingStackStyle(canvas, payload) {
     ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
   }
 
-  // Each column width
-  const colW = Math.floor((outW - outerPad * 2 - gap) / 2);
-  const colH = contentH - outerPad * 2;
+  const cols = 2;
+  const rows = 3;
+  const cellW = Math.floor((outW - outerPad * 2 - gap * (cols - 1)) / cols);
+  const cellH = Math.floor((contentH - outerPad * 2 - gap * (rows - 1)) / rows);
 
-  // Match EVERY cell to the photo aspect ratio (3:2 landscape) so no part
-  // of a house gets cut off. Cover takes the full column width; bottom
-  // cells are half-column width. Vertical remainder becomes navy padding
-  // centered around the content block — same navy-panel feel as the "Just
-  // Listed - 156 Williams Ave" style post.
-  const bottomCellW = Math.floor((colW - gap) / 2);
-  const bottomH = Math.round(bottomCellW / 1.5); // 3:2 ratio match
-  const coverH = Math.round(colW / 1.5);          // 3:2 ratio match
-  const contentBlockH = coverH + gap + bottomH;
-  const colVOffset = Math.max(0, Math.round((colH - contentBlockH) / 2));
-
-  // Caption band at the bottom of the cover: translucent navy with address+specs+price
+  // Caption band at the bottom of a cell (used on the cover only).
   function drawCoverCaption(x, y, w, h, listing) {
     const addr = (listing.address || "").toString();
-    const addrFont = Math.round(h * 0.07);
-    const specFont = Math.round(h * 0.055);
-    const priceFont = Math.round(h * 0.07);
-    const capH = Math.round(h * 0.26);
+    const addrFont = Math.max(16, Math.round(h * 0.17));
+    const specFont = Math.max(12, Math.round(h * 0.12));
+    const priceFont = Math.max(14, Math.round(h * 0.15));
+    const capH = Math.round(h * 0.42);
     const capY = y + h - capH;
-    ctx.fillStyle = "rgba(10, 20, 40, 0.85)";
+    // Gradient band
+    const grad = ctx.createLinearGradient(x, capY, x, y + h);
+    grad.addColorStop(0, "rgba(10, 20, 40, 0)");
+    grad.addColorStop(0.35, "rgba(10, 20, 40, 0.55)");
+    grad.addColorStop(1, "rgba(10, 20, 40, 0.92)");
+    ctx.fillStyle = grad;
     ctx.fillRect(x, capY, w, capH);
 
     // Address
     ctx.fillStyle = WHITE;
-    ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     let af = addrFont;
     ctx.font = `800 ${af}px 'Helvetica Neue', Arial, sans-serif`;
-    while (ctx.measureText(addr.toUpperCase()).width > w - 24 && af > 16) {
+    while (ctx.measureText(addr.toUpperCase()).width > w - 24 && af > 14) {
       af -= 1;
       ctx.font = `800 ${af}px 'Helvetica Neue', Arial, sans-serif`;
     }
-    ctx.fillText(addr.toUpperCase(), x + 12, capY + 8);
-
-    // Specs
     const specs = [];
     if (listing.beds) specs.push(`${listing.beds} BD`);
     if (listing.baths) specs.push(`${listing.baths} BA`);
     if (listing.sqft) specs.push(`${Number(listing.sqft).toLocaleString()} SF`);
     if (specs.length === 0 && listing.lotSize) specs.push(String(listing.lotSize).toUpperCase());
+
+    const padBottom = Math.round(h * 0.04);
+    const specY = y + h - padBottom;
+    const addrY = specs.length > 0 ? specY - specFont - 6 : specY;
+
+    ctx.fillText(addr.toUpperCase(), x + 12, addrY);
     if (specs.length > 0) {
       ctx.fillStyle = "rgba(245, 241, 232, 0.9)";
       ctx.font = `600 ${specFont}px 'Helvetica Neue', Arial, sans-serif`;
-      ctx.fillText(specs.join("  ·  "), x + 12, capY + af + 12);
+      ctx.fillText(specs.join("  ·  "), x + 12, specY);
     }
 
-    // Price badge (red, top-right over cover)
+    // Price badge (red) top-right over the cover photo
     if (listing.listPrice) {
       const priceStr = `$${Number(listing.listPrice).toLocaleString()}`;
       ctx.font = `900 ${priceFont}px 'Helvetica Neue', Arial, sans-serif`;
@@ -10935,22 +10925,21 @@ function renderPerListingStackStyle(canvas, payload) {
 
   for (let i = 0; i < Math.min(listings.length, 2); i++) {
     const listing = listings[i];
-    const colX = outerPad + i * (colW + gap);
-    const colY = contentY + outerPad + colVOffset;
-
-    // Cover photo
-    drawContainFit(listing.coverImg, colX, colY, colW, coverH);
-    drawCoverCaption(colX, colY, colW, coverH, listing);
-
-    // 2 extra photos below in a row. Interior shots cover-crop cleanly —
-    // losing a little off the sides is fine for a kitchen or bathroom.
-    const bottomY = colY + coverH + gap;
+    const colX = outerPad + i * (cellW + gap);
     const extras = listing.extraImgs || [];
-    if (extras[0]) drawCoverCrop(extras[0], colX, bottomY, bottomCellW, bottomH);
-    else { ctx.fillStyle = NAVY; ctx.fillRect(colX, bottomY, bottomCellW, bottomH); }
-    const rightX = colX + bottomCellW + gap;
-    if (extras[1]) drawCoverCrop(extras[1], rightX, bottomY, bottomCellW, bottomH);
-    else { ctx.fillStyle = NAVY; ctx.fillRect(rightX, bottomY, bottomCellW, bottomH); }
+
+    // Row 0: cover photo (with address + specs + price badge)
+    const row0Y = contentY + outerPad;
+    drawCoverCrop(listing.coverImg, colX, row0Y, cellW, cellH);
+    drawCoverCaption(colX, row0Y, cellW, cellH, listing);
+
+    // Row 1: first interior shot
+    const row1Y = row0Y + cellH + gap;
+    drawCoverCrop(extras[0], colX, row1Y, cellW, cellH);
+
+    // Row 2: second interior shot
+    const row2Y = row1Y + cellH + gap;
+    drawCoverCrop(extras[1], colX, row2Y, cellW, cellH);
   }
 }
 

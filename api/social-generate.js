@@ -962,14 +962,17 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       const photos = photosByListing[m.id] || [];
       if (photos.length === 0) continue;
       const coverPhoto = photos.find(p => p.isCover) || photos[0];
-      // For the stack layout, also attach up to 2 non-cover photos per listing.
-      // Upload order determines which rooms show — Jesse controls that by the
-      // order he uploads photos (cover first, then interior shots).
-      const extras = photos.filter(p => p !== coverPhoto).slice(0, 2);
+      // For the stack layout, attach up to 2 non-cover photos as the
+      // DEFAULT bottom slots (upload order) — Jesse can override them in
+      // the frontend picker. Also send ALL available non-cover photos as
+      // allPhotos so the picker has a full thumbnail strip to choose from.
+      const nonCover = photos.filter(p => p !== coverPhoto);
+      const extras = nonCover.slice(0, 2);
       listingsForOverlay.push({
         id: m.id || null,
         sourceUrl: coverPhoto.url,
         extraPhotos: extras.map(p => p.url),
+        allPhotos: nonCover.map(p => p.url),
         address: m.address || "",
         city: m.city || "",
         state: m.state || "",

@@ -10558,9 +10558,13 @@ function renderPhotoTourStyle(canvas, payload) {
 // Each cell shows photo + address + specs + price. Shared header with the
 // label (JUST LISTED, SOLD, etc.) and shared navy footer with team branding.
 function renderCollageStyle(canvas, payload) {
-  const { imgs, listings, logoImg, headshotImg, colors, label } = payload;
+  const { imgs, extraImgs, listings, logoImg, headshotImg, colors, label } = payload;
   const { NAVY, RED, CREAM, WHITE } = colors;
   const n = Math.min(imgs.length, 6); // cap at 6
+  // For n=2, if both listings have an extra photo, we lay out a 2x2 grid
+  // (covers on top row, extras on bottom row) so there's no empty padding.
+  const use2x2 = n === 2 && Array.isArray(extraImgs)
+    && extraImgs.filter(e => e && e.naturalWidth).length === 2;
 
   // Fixed output canvas size (1200x1200 — square, great for Instagram)
   const outW = 1200;
@@ -10635,7 +10639,20 @@ function renderCollageStyle(canvas, payload) {
 
   // Decide grid layout
   let cells;
-  if (n === 2) {
+  if (use2x2) {
+    // 2 listings with an extra photo each — lay out as 2x2 (covers on top
+    // row, extras on bottom row). Cells are landscape (ratio ~1.3 — wider
+    // than 3:2) so cover-crop trims a little off top/bottom (sky/foreground)
+    // and preserves the full width of every house.
+    const cellW = Math.floor((outW - outerPad * 2 - gap) / 2);
+    const cellH = Math.floor((collageH - outerPad * 2 - gap) / 2);
+    cells = [
+      { x: outerPad,                y: collageY + outerPad,                w: cellW, h: cellH, i: 0, isCover: true,  listingIdx: 0 },
+      { x: outerPad + cellW + gap,  y: collageY + outerPad,                w: cellW, h: cellH, i: 1, isCover: true,  listingIdx: 1 },
+      { x: outerPad,                y: collageY + outerPad + cellH + gap,  w: cellW, h: cellH, i: 2, isCover: false, listingIdx: 0 },
+      { x: outerPad + cellW + gap,  y: collageY + outerPad + cellH + gap,  w: cellW, h: cellH, i: 3, isCover: false, listingIdx: 1 },
+    ];
+  } else if (n === 2) {
     // Shape the 2-up cells to match real-estate photos (3:2 landscape) so
     // cover-crop doesn't slice houses in half. Vertical remainder becomes
     // centered navy padding — same navy-panel look as the branded posts.
@@ -10686,10 +10703,18 @@ function renderCollageStyle(canvas, payload) {
   }
 
   // Draw each cell: cover-crop the photo, then overlay a small gradient
-  // caption area at the bottom with address + price.
+  // caption area at the bottom with address + price. In 2x2 mode, the
+  // bottom-row cells are the extra photos (listingIdx controls which
+  // listing's info the caption uses, isCover=false skips the caption).
   for (const cell of cells) {
-    const im = imgs[cell.i];
-    const listing = listings[cell.i];
+    let im, listing;
+    if (use2x2) {
+      im = cell.isCover ? imgs[cell.listingIdx] : extraImgs[cell.listingIdx];
+      listing = listings[cell.listingIdx];
+    } else {
+      im = imgs[cell.i];
+      listing = listings[cell.i];
+    }
     if (!im) continue;
 
     // Cover-fit crop
@@ -10704,6 +10729,10 @@ function renderCollageStyle(canvas, payload) {
       sy = Math.round((im.naturalHeight - sh) / 2);
     }
     ctx.drawImage(im, sx, sy, sw, sh, cell.x, cell.y, cell.w, cell.h);
+
+    // In 2x2 mode, only the top-row (cover) cells carry the caption; the
+    // bottom-row cells just show the extra photo cleanly.
+    if (use2x2 && cell.isCover === false) continue;
 
     // Caption gradient at bottom of cell
     const capH = Math.round(cell.h * 0.3);
@@ -11167,18 +11196,31 @@ function BrandedOverlayGraphic({ overlay }) {
         } else
         // ─── MULTI-LISTING COLLAGE PATH ───
         if (overlay.isMulti && Array.isArray(overlay.listings) && overlay.listings.length > 1) {
-          // Load all photos in parallel
-          const imgs = await Promise.all(overlay.listings.map(l => new Promise((resolve, reject) => {
+          const loadImg = (src) => new Promise((resolve) => {
+            if (!src) return resolve(null);
             const im = new Image();
             im.crossOrigin = "anonymous";
             im.onload = () => resolve(im);
-            im.onerror = () => reject(new Error(`Could not load photo for ${l.address}`));
-            im.src = l.sourceUrl;
-          })));
+            im.onerror = () => resolve(null);
+            im.src = src;
+          });
+          // Load cover + 1 extra per listing (extraPhotos[0] from backend).
+          // When present AND n=2, renderCollageStyle lays out a 2x2 grid
+          // instead of leaving the bottom half of the post as navy padding.
+          const perListingImgs = await Promise.all(overlay.listings.map(async (l) => {
+            const [cover, extra] = await Promise.all([
+              loadImg(l.sourceUrl),
+              loadImg((l.extraPhotos && l.extraPhotos[0]) || null),
+            ]);
+            return { cover, extra };
+          }));
           if (cancelled) return;
+          // Keep the covers-only array for the ≥3 branch (unchanged behavior)
+          const imgs = perListingImgs.map(p => p.cover).filter(Boolean);
+          const extraImgs = perListingImgs.map(p => p.extra); // may contain null
 
           renderCollageStyle(canvas, {
-            imgs, listings: overlay.listings, logoImg, headshotImg, colors,
+            imgs, extraImgs, listings: overlay.listings, logoImg, headshotImg, colors,
             label: overlay.label || "",
           });
           styleName = "COLLAGE";

@@ -958,6 +958,14 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
     const perListingStackIntent = (mentioned.length === 2)
       && (roomKeywordRE.test(lastText) || stackPhraseRE.test(lastText));
 
+    // "Just use one photo" / "only the cover" / "simpler" / "fewer photos" /
+    // "just the cover" / "no extras" / "one photo each" / "single photo"
+    // → force a covers-only layout (no 2x2 grid, no stack). Catches both
+    // written numbers ("one", "two") and digits ("1 photo"). Also matches
+    // phrases like "less photos" / "simpler layout".
+    const coversOnlyRE = /\b(just|only)\s+(the\s+)?cover(s)?\b|\b(no|without|skip|remove|drop)\s+(the\s+)?(extra|extras|interior|second)\b|\b(just|only|use)\s+(one|1|a\s+single)\s+(photo|picture|image)\b|\b(one|1|single)\s+(photo|picture|image)\s+(per|each|only)\b|\b(fewer|less|simpler|minimal|minimalist|clean(er)?)\s+(photos|layout|design)\b|\b(simpler|cleaner)\b/i;
+    const coversOnlyIntent = coversOnlyRE.test(lastText);
+
     // Build the per-listing array (preserve the order mentioned appeared in)
     const listingsForOverlay = [];
     for (const m of mentioned) {
@@ -999,17 +1007,28 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       // listing with just a cover doesn't look empty under it.
       const bothHaveExtras = listingsForOverlay.length === 2
         && listingsForOverlay.every(l => (l.extraPhotos || []).length >= 1);
-      const useStack = perListingStackIntent && bothHaveExtras;
+      // coversOnly intent overrides EVERYTHING — no stack, no 2x2, just the
+      // flat 1-cover-per-listing layout (what Jesse was happy with earlier).
+      const useStack = perListingStackIntent && bothHaveExtras && !coversOnlyIntent;
+
+      // When covers-only is requested, strip extraPhotos from each listing
+      // so the frontend's 2x2 picker doesn't fire either. allPhotos is
+      // preserved so Jesse can STILL open the picker if he changes his mind,
+      // but the default render is covers only.
+      const listingsOut = coversOnlyIntent
+        ? listingsForOverlay.map(l => ({ ...l, extraPhotos: [] }))
+        : listingsForOverlay;
 
       overlay = {
         template: effectiveTemplate,
         label: effectiveLabel,
         subtitle: isMulti ? "" : badgePrice,
-        sourceUrl: listingsForOverlay[0].sourceUrl,
-        listing: listingsForOverlay[0],
-        listings: listingsForOverlay,
+        sourceUrl: listingsOut[0].sourceUrl,
+        listing: listingsOut[0],
+        listings: listingsOut,
         isMulti,
         isPerListingStack: useStack,
+        coversOnly: coversOnlyIntent,
       };
     }
   }
@@ -1036,6 +1055,7 @@ For follow-ups ("make it shorter", "more casual", "swap the opening") → rewrit
       priorTemplate: priorTemplate || null,
       priorLabel: priorLabel || null,
       isPerListingStack: overlay ? !!overlay.isPerListingStack : false,
+      coversOnly: overlay ? !!overlay.coversOnly : false,
     },
   };
 }

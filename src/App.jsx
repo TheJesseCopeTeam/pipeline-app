@@ -1316,12 +1316,23 @@ function MainApp({ user }) {
       subscribeToTable("todo_lists", () => reloadTable("todo_lists", setTodoLists, false)),
       // user_settings is a single-row table per user — just reload on any change
       subscribeToTable("user_settings", async () => {
-        // Suppress echoes of our own writes — if we wrote in the last 3 seconds,
-        // skip the realtime reload. The cloud already has our value; reloading
-        // can race and overwrite optimistic UI updates mid-edit (Quick Launch bug).
-        if (Date.now() - lastSettingsWriteRef.current < 3000) return;
-        try { const fresh = await loadSettings(); setAppSettings(fresh || {}); }
-        catch (e) { console.error("Reload settings failed:", e); }
+        // Suppress echoes of our own writes — if we wrote in the last 10
+        // seconds, skip the realtime reload. The cloud already has our
+        // value; reloading can race against a slow replica and overwrite
+        // optimistic UI updates mid-edit (Quick Launch disappearing bug).
+        // Also skip when the fetched settings blob is empty but we have a
+        // non-empty one — that almost always means a transient read against
+        // an empty replica, not a real user_settings wipe.
+        if (Date.now() - lastSettingsWriteRef.current < 10000) return;
+        try {
+          const fresh = await loadSettings();
+          setAppSettings(prev => {
+            const isEmpty = !fresh || Object.keys(fresh).length === 0;
+            const haveLocal = prev && Object.keys(prev).length > 0;
+            if (isEmpty && haveLocal) return prev; // don't wipe over empty fetch
+            return fresh || {};
+          });
+        } catch (e) { console.error("Reload settings failed:", e); }
       }),
     ];
     return () => handlers.forEach(unsub => unsub && unsub());
@@ -1337,14 +1348,23 @@ function MainApp({ user }) {
   };
 
   // Update a single setting key in cloud mode. Optimistically updates local
-  // state, then writes the full merged settings blob to Supabase. In local
-  // mode this is a no-op — widgets manage their own localStorage.
+  // state via the FUNCTIONAL setter (so `prev` is always the latest state —
+  // never a stale closure snapshot), then writes the full merged settings
+  // blob to Supabase. Using functional setState here is the root fix for
+  // "I added a Quick Launch tile and it keeps disappearing" — if two
+  // setting changes happened near each other (or a realtime echo bumped
+  // state in between), the second save was previously using an OLD
+  // appSettings from closure and clobbering the first save's additions.
+  // In local mode this is a no-op — widgets manage their own localStorage.
   const updateSetting = async (key, value) => {
-    const next = { ...appSettings, [key]: value };
-    setAppSettings(next);
+    let snapshot;
+    setAppSettings(prev => {
+      snapshot = { ...(prev || {}), [key]: value };
+      return snapshot;
+    });
     if (isCloud) {
       lastSettingsWriteRef.current = Date.now(); // Mark write so realtime echo is suppressed
-      try { await saveSettings(next); }
+      try { await saveSettings(snapshot); }
       catch (e) { console.error(`Save setting ${key} failed:`, e); }
       // Keep suppression window alive until the write + echo round-trip completes
       lastSettingsWriteRef.current = Date.now();
@@ -10992,6 +11012,11 @@ function BrandedOverlayGraphic({ overlay }) {
   // when the overlay isn't a stack layout.
   const [stackPicks, setStackPicks] = useState(null);
 
+  // 2x2 collage picker: collagePicks[listingIndex] is a SINGLE photo URL
+  // (the extra shown in the bottom row of that listing's column). null when
+  // the overlay isn't a 2-listing collage that has extra photos.
+  const [collagePicks, setCollagePicks] = useState(null);
+
   // When overlay changes, reset the tour selection to the first 4 photos.
   useEffect(() => {
     if (overlay && overlay.isTour && Array.isArray(overlay.tourPhotos)) {
@@ -11009,6 +11034,18 @@ function BrandedOverlayGraphic({ overlay }) {
       setStackPicks(initial);
     } else {
       setStackPicks(null);
+    }
+  }, [overlay]);
+
+  // When overlay changes AND it's a 2-listing collage with available extras,
+  // seed the 2x2 picker with the backend's default (first non-cover photo).
+  useEffect(() => {
+    if (overlay && overlay.isMulti && !overlay.isPerListingStack
+        && Array.isArray(overlay.listings) && overlay.listings.length === 2
+        && overlay.listings.every(l => (l.extraPhotos || []).length > 0)) {
+      setCollagePicks(overlay.listings.map(l => l.extraPhotos[0]));
+    } else {
+      setCollagePicks(null);
     }
   }, [overlay]);
 
@@ -11054,6 +11091,24 @@ function BrandedOverlayGraphic({ overlay }) {
   function resetStackPicks() {
     if (!overlay || !overlay.isPerListingStack || !Array.isArray(overlay.listings)) return;
     setStackPicks(overlay.listings.map(l => (l.extraPhotos || []).slice(0, 2)));
+  }
+
+  // Set the single extra-photo slot for listing lIdx to url. If the user
+  // taps the photo that's already selected, reset to the default.
+  function setCollagePick(lIdx, url) {
+    setCollagePicks(prev => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next[lIdx] = (prev[lIdx] === url && overlay.listings[lIdx].extraPhotos[0])
+        ? overlay.listings[lIdx].extraPhotos[0]
+        : url;
+      return next;
+    });
+  }
+
+  function resetCollagePicks() {
+    if (!overlay || !overlay.isMulti || !Array.isArray(overlay.listings)) return;
+    setCollagePicks(overlay.listings.map(l => (l.extraPhotos || [])[0] || null));
   }
 
   useEffect(() => {
@@ -11204,13 +11259,17 @@ function BrandedOverlayGraphic({ overlay }) {
             im.onerror = () => resolve(null);
             im.src = src;
           });
-          // Load cover + 1 extra per listing (extraPhotos[0] from backend).
-          // When present AND n=2, renderCollageStyle lays out a 2x2 grid
-          // instead of leaving the bottom half of the post as navy padding.
-          const perListingImgs = await Promise.all(overlay.listings.map(async (l) => {
+          // Load cover + 1 extra per listing. Prefer the picker's choice when
+          // present; else the backend's default (extraPhotos[0]). When both
+          // listings yield a usable extra, renderCollageStyle lays out a 2x2
+          // grid instead of leaving the bottom half as navy padding.
+          const perListingImgs = await Promise.all(overlay.listings.map(async (l, lIdx) => {
+            const extraUrl = (collagePicks && collagePicks[lIdx])
+              || (l.extraPhotos && l.extraPhotos[0])
+              || null;
             const [cover, extra] = await Promise.all([
               loadImg(l.sourceUrl),
-              loadImg((l.extraPhotos && l.extraPhotos[0]) || null),
+              loadImg(extraUrl),
             ]);
             return { cover, extra };
           }));
@@ -11322,7 +11381,7 @@ function BrandedOverlayGraphic({ overlay }) {
 
     render();
     return () => { cancelled = true; };
-  }, [overlay, renderNonce, tourSelectedUrls, stackPicks]);
+  }, [overlay, renderNonce, tourSelectedUrls, stackPicks, collagePicks]);
 
   if (!overlay) return null;
 
@@ -11392,6 +11451,76 @@ function BrandedOverlayGraphic({ overlay }) {
               ↻ Try another style
             </button>
           )}
+        </div>
+      )}
+      {collagePicks && overlay.isMulti && !overlay.isPerListingStack
+        && Array.isArray(overlay.listings) && overlay.listings.length === 2 && (
+        <div style={{ marginTop: 12, padding: "10px 12px", background: "#FBF9F4", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: C.taupe, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+              Pick the 2nd photo for each listing
+            </div>
+            <button
+              onClick={resetCollagePicks}
+              style={{ padding: "4px 10px", background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, color: C.taupe, fontSize: 11, cursor: "pointer" }}
+              title="Reset to upload-order default">
+              ↺ Reset
+            </button>
+          </div>
+          {overlay.listings.map((l, lIdx) => {
+            const picked = collagePicks[lIdx];
+            const available = (l.allPhotos && l.allPhotos.length > 0)
+              ? l.allPhotos
+              : (l.extraPhotos || []);
+            return (
+              <div key={l.id || lIdx} style={{ marginBottom: lIdx === 0 ? 14 : 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", marginBottom: 6 }}>
+                  {l.address || `Listing ${lIdx + 1}`}
+                  <span style={{ fontWeight: 400, color: C.taupe, marginLeft: 8 }}>
+                    — tap a thumbnail to show it in the bottom row
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {available.length === 0 && (
+                    <div style={{ fontSize: 11, color: C.taupe, fontStyle: "italic" }}>
+                      No non-cover photos uploaded for this listing.
+                    </div>
+                  )}
+                  {available.map((url, pIdx) => {
+                    const isPicked = url === picked;
+                    return (
+                      <button
+                        key={url}
+                        onClick={() => setCollagePick(lIdx, url)}
+                        style={{
+                          position: "relative", width: 68, height: 68,
+                          borderRadius: 6, overflow: "hidden",
+                          border: isPicked ? `3px solid ${C.red}` : `2px solid ${C.line}`,
+                          padding: 0, cursor: "pointer", background: "transparent",
+                          opacity: isPicked ? 1 : 0.6,
+                        }}
+                        title={isPicked ? "Currently selected" : "Tap to use this photo"}>
+                        <img src={url} alt={`photo ${pIdx + 1}`}
+                             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        {isPicked && (
+                          <div style={{
+                            position: "absolute", top: 2, right: 2,
+                            width: 20, height: 20, borderRadius: "50%",
+                            background: C.red, color: "#fff", fontSize: 11, fontWeight: 700,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                          }}>✓</div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 11, color: C.taupe, marginTop: 10, fontStyle: "italic" }}>
+            The post rebuilds automatically. To show more than one extra photo per listing, ask: "add a kitchen and living room for 1745 23rd and a kitchen and bedroom for 256 28th."
+          </div>
         </div>
       )}
       {overlay.isPerListingStack && Array.isArray(overlay.listings) && overlay.listings.length === 2 && stackPicks && (

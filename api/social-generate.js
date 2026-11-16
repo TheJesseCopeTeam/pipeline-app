@@ -497,8 +497,11 @@ async function fetchNwmlsAttachments(mentionedListings) {
 }
 
 // Phase C: Fetch signed URLs for photos of mentioned listings. Cover photo
-// first, then the rest in saved order. Capped to avoid token explosion.
-const PHOTOS_PER_LISTING = 10;
+// first, then the rest in saved order. The cap controls how many photos are
+// available to the frontend picker — raised from 10 to 40 so Jesse can pick
+// from his whole uploaded set per listing. (Only PHOTOS_IN_CLAUDE_CONTEXT
+// are actually sent to Claude for writing the post.)
+const PHOTOS_PER_LISTING = 40;
 // Only this many photos are attached to Claude's context for writing the post —
 // Jesse can still pick from the full set in the frontend tour picker.
 const PHOTOS_IN_CLAUDE_CONTEXT = 6;
